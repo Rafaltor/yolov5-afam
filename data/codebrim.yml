@@ -1,0 +1,8 @@
+path: C:\Users\Paul-Maxence Baraton\OneDrive\Documents\TEAMAWARE\processed_dataset  # dataset root dir
+train: C:\Users\Paul-Maxence Baraton\OneDrive\Documents\TEAMAWARE\processed_dataset  # train images (relative to 'path') 118287 images
+val: C:\Users\Paul-Maxence Baraton\OneDrive\Documents\TEAMAWARE\processed_dataset  # val images (relative to 'path') 5000 images
+
+
+# Classes
+nc: 1  # number of classes
+names: ['Deffect']
