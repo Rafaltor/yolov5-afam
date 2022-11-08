@@ -170,8 +170,8 @@ def process_batch_afam(detections, labels, ioav, accurate_metrics):
         conf, detections = conf[:min(len(detections), len(labels))], detections[:min(len(detections), len(labels))]
 
     # Output vectors
-    tp_precision = torch.ones(detections.shape[0], len(ioav), dtype=torch.bool, device=ioav.device)
-    tp_recall = torch.zeros(detections.shape[0], len(ioav), device=ioav.device)
+    tp_precision = torch.ones(detections.shape[0], len(ioav), dtype=torch.bool, device=labels.device)
+    tp_recall = torch.zeros(detections.shape[0], len(ioav), device=labels.device)
 
     # Computation vectors
     iogs = torch.zeros(detections.shape[0], labels.shape[0], device=labels.device)  # Input over Ground Truth
@@ -203,6 +203,7 @@ def process_batch_afam(detections, labels, ioav, accurate_metrics):
     tp_precision = iops > ioav.expand(len(detections), len(ioav))
     tp_recall = torch.diff((torch.transpose(iogs.cumsum(0).expand(len(ioav), len(detections), len(labels)), 0, 2) >
                             ioav.expand(len(detections), len(ioav))).sum(0), 1, 0, prepend=torch.zeros(1, len(ioav)))
+
 
     return tp_recall, tp_precision, conf, detections[:, 5]
 
