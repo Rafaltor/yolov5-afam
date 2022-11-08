@@ -202,7 +202,7 @@ def process_batch_afam(detections, labels, ioav, accurate_metrics):
 
     tp_precision = iops > ioav.expand(len(detections), len(ioav))
     tp_recall = torch.diff((torch.transpose(iogs.cumsum(0).expand(len(ioav), len(detections), len(labels)), 0, 2) >
-                            ioav.expand(len(detections), len(ioav))).sum(0), 1, 0, prepend=torch.zeros(1, len(ioav)))
+                            ioav.expand(len(detections), len(ioav))).sum(0), 1, 0, prepend=torch.zeros(1, len(ioav), device=labels.device))
 
 
     return tp_recall, tp_precision, conf, detections[:, 5]
