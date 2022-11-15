@@ -179,18 +179,19 @@ def process_batch_afam(detections, labels, ioav, accurate_metrics):
     iops = torch.zeros(detections.shape[0], labels.shape[0], device=labels.device)  # Input over Predictions
     box_found = []
     correct_class = detections[:, 5] == labels[:, 0:1]
-
+    t1 = time()
     for i, label in enumerate(labels[:, 1:5]):
         indexes = torch.where(correct_class[i])
-
+        label_area = tools.box_area(label)
         for j, pred in enumerate(detections[correct_class[i]]):
-            if tools.get_intersection_area_from_tuple(pred, label) != 0:
+            if tools.get_intersection_area_from_tuple(pred, label) != 0 and (iogs[correct_class[i], i].sum()) < 0.99*label_area:
                 intersection_pred_label = tools.get_intersection_from_list([pred], label)[0]
 
                 union_preds_labels = torch.cat((labels[:i, 1:][labels[:i, 0] == labels[i, 0]],
                                                 detections[correct_class[i]][:j, :4]))
                 iogs[indexes[0][j], i] = tools.box_area(intersection_pred_label) - tools.get_union_from_list(
                     tools.get_intersection_from_list(union_preds_labels, intersection_pred_label))
+
 
     iops = torch.t(torch.t(iogs) / tools.boxes_area(detections[:, :4]))
     iogs = iogs / tools.boxes_area(labels[:, 1:])
@@ -200,6 +201,7 @@ def process_batch_afam(detections, labels, ioav, accurate_metrics):
                             ioav.expand(len(detections), len(ioav))).sum(0), 1, 0,
                            prepend=torch.zeros(1, len(ioav), device=labels.device))
 
+    print(len(detections),time()-t1)
     return tp_recall, tp_precision, conf, detections[:, 5]
 
 
@@ -237,7 +239,7 @@ def run(
         compute_afam=True
 ):
     compute_avam = 0
-    compute_afam = 0
+    compute_afam = 1
     # Initialize/load model and set device
     training = model is not None
     if training:  # called by train.py
@@ -551,7 +553,7 @@ def parse_opt():
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
-    parser.add_argument('--final-epoch', type=int, default=0, help='Accurate or fast validation')
+    parser.add_argument('--final-epoch', type=int, default=1, help='Accurate or fast validation')
 
     opt = parser.parse_args()
     opt.data = check_yaml(opt.data)  # check YAML
