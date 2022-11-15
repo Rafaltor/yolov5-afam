@@ -1,5 +1,5 @@
 # YOLOv5 🚀 by Ultralytics, GPL-3.0 license
-#Rafalor metrics for AFAM
+# Rafalor metrics for AFAM
 
 """
 Validate a trained YOLOv5 model accuracy on a custom dataset
@@ -22,7 +22,8 @@ Usage - formats:
 
 from utils.torch_utils import select_device, time_sync
 from utils.plots import output_to_target, plot_images, plot_val_study
-from utils.metrics import ConfusionMatrix, ap_per_class, box_iou, afam_per_class, avam_per_class, plot_mc_curve, ap_per_class_afam
+from utils.metrics import ConfusionMatrix, ap_per_class, box_iou, afam_per_class, avam_per_class, plot_mc_curve, \
+    ap_per_class_afam
 from utils.general import (LOGGER, check_dataset, check_img_size, check_requirements, check_yaml,
                            coco80_to_coco91_class, colorstr, emojis, increment_path, non_max_suppression, print_args,
                            scale_coords, xywh2xyxy, xyxy2xywh)
@@ -38,6 +39,7 @@ import tools
 import numpy as np
 import torch
 from tqdm import tqdm
+from time import time
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
@@ -172,38 +174,31 @@ def process_batch_afam(detections, labels, ioav, accurate_metrics):
     # Output vectors
     tp_precision = torch.ones(detections.shape[0], len(ioav), dtype=torch.bool, device=labels.device)
     tp_recall = torch.zeros(detections.shape[0], len(ioav), device=labels.device)
-
     # Computation vectors
     iogs = torch.zeros(detections.shape[0], labels.shape[0], device=labels.device)  # Input over Ground Truth
-    iops = torch.zeros(detections.shape[0], 1, device=labels.device)  # Input over Predictions
+    iops = torch.zeros(detections.shape[0], labels.shape[0], device=labels.device)  # Input over Predictions
     box_found = []
     correct_class = detections[:, 5] == labels[:, 0:1]
 
     for i, label in enumerate(labels[:, 1:5]):
-        intersection = []
         indexes = torch.where(correct_class[i])
-        label_area = tools.box_area(label)
 
         for j, pred in enumerate(detections[correct_class[i]]):
+            if tools.get_intersection_area_from_tuple(pred, label) != 0:
+                intersection_pred_label = tools.get_intersection_from_list([pred], label)[0]
 
-            intersection = intersection + tools.get_intersection_from_list([pred], label)
-            iogs[indexes[0][j], i] = tools.get_union_from_list(intersection) / label_area - iogs[:, i].sum(0)
+                union_preds_labels = torch.cat((labels[:i, 1:][labels[:i, 0] == labels[i, 0]],
+                                                detections[correct_class[i]][:j, :4]))
+                iogs[indexes[0][j], i] = tools.box_area(intersection_pred_label) - tools.get_union_from_list(
+                    tools.get_intersection_from_list(union_preds_labels, intersection_pred_label))
 
-    for j, pred in enumerate(detections):
-        iops[j] = (tools.get_union_from_list(
-            tools.get_intersection_from_list(labels[correct_class[:, j]][:, 1:5], pred)) -
-                   tools.get_union_from_list(tools.get_intersection_between_list(
-                       tools.get_intersection_between_list(
-                           detections[:j][detections[:j, 5] == pred[5]], [pred]), labels[labels[:, 0] == pred[5], 1:5]))) / \
-                  tools.box_area(pred)
+    iops = torch.t(torch.t(iogs) / tools.boxes_area(detections[:, :4]))
+    iogs = iogs / tools.boxes_area(labels[:, 1:])
 
-        if iops[j] >= 0.05:
-            box_found = box_found + tools.get_intersection_between_list(labels[:, 1:5], [pred])
-
-    tp_precision = iops > ioav.expand(len(detections), len(ioav))
+    tp_precision = iops.sum(1).reshape(-1, 1) > ioav.expand(len(detections), len(ioav))
     tp_recall = torch.diff((torch.transpose(iogs.cumsum(0).expand(len(ioav), len(detections), len(labels)), 0, 2) >
-                            ioav.expand(len(detections), len(ioav))).sum(0), 1, 0, prepend=torch.zeros(1, len(ioav), device=labels.device))
-
+                            ioav.expand(len(detections), len(ioav))).sum(0), 1, 0,
+                           prepend=torch.zeros(1, len(ioav), device=labels.device))
 
     return tp_recall, tp_precision, conf, detections[:, 5]
 
@@ -408,7 +403,8 @@ def run(
 
             if compute_afam:
                 # TP for recall, FP=(1-TP) for precision, conf
-                correct_rec_afam, correct_prec_afam, conf, pred_class = process_batch_afam(predn, labels, iouv_afam, final_epoch)
+                correct_rec_afam, correct_prec_afam, conf, pred_class = process_batch_afam(predn, labels, iouv_afam,
+                                                                                           final_epoch)
                 afam_stats.append((correct_rec_afam, correct_prec_afam, conf, labels[:, 0]))
                 afam_stats_ap.append((correct_rec_afam, correct_prec_afam, conf, pred_class, labels[:, 0]))
 
@@ -445,8 +441,8 @@ def run(
     conf_classify, fp_classify, fn_classify = conf_classify[order], fp_classify[order], fn_classify[order]
     fp_classify = fp_classify[::-1].cumsum(0)[::-1] / (totimg_empty + totimg_full)
     fn_classify = fn_classify.cumsum(0) / (totimg_full + totimg_empty)
-    #plot_mc_curve(conf_classify, [1 - fp_classify, fp_classify, fn_classify, 1 - fn_classify],
-                  #Path(save_dir) / 'classify.png', names=("TN", "FP", "FN", "TP"), x_label='Confidence')
+    # plot_mc_curve(conf_classify, [1 - fp_classify, fp_classify, fn_classify, 1 - fn_classify],
+    # Path(save_dir) / 'classify.png', names=("TN", "FP", "FN", "TP"), x_label='Confidence')
     if len(stats) and stats[0].any():
         if compute_afam:
             afap, afar, afamf1, ap_afam = ap_per_class_afam(*afam_stats_ap, plot=plots, save_dir=save_dir, names=names)
@@ -538,8 +534,8 @@ def run(
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data', type=str, default=ROOT / 'data/codebrim.yml', help='dataset.yaml path')
-    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'bestweight.pt', help='model.pt path(s)')
+    parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='dataset.yaml path')
+    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov5s.pt', help='model.pt path(s)')
     parser.add_argument('--batch-size', type=int, default=32, help='batch size')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.001, help='confidence threshold')
@@ -559,7 +555,7 @@ def parse_opt():
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
-    parser.add_argument('--final-epoch', type=int, default=1, help='Accurate or fast validation')
+    parser.add_argument('--final-epoch', type=int, default=0, help='Accurate or fast validation')
 
     opt = parser.parse_args()
     opt.data = check_yaml(opt.data)  # check YAML

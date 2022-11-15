@@ -85,6 +85,10 @@ def box_area(box):
     # box = xyxy(4,n)
     return (box[2] - box[0]) * (box[3] - box[1])
 
+def boxes_area(boxes):
+    # boxes = xyxy(4,n)
+    return (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+
 
 def get_intersection_from_tuple(rect1, rect2, class_exigence=False):
     """
@@ -251,3 +255,28 @@ def get_union_from_list(R):
         C.change(i1, i2, offset)
         previous_y = y
     return area
+
+
+def box_ioa(box1, box2):
+    """
+    Returns the intersection over box2 area given box1, box2.
+    Both sets of boxes are expected to be in (x1, y1, x2, y2) format.
+    Arguments:
+        box1 (Array[4])
+        box2 (Array[4])
+    Returns:
+        ioa (int): the IoA values for boxes1 and boxes2
+    """
+
+    inter = get_intersection_area_from_tuple(box1, box2)
+
+    # IoA = inter / (area1)
+    return inter / box_area(box1)
+
+
+def box_is_in(box, box_list):
+    for ib, boxes in enumerate(box_list):
+        if box_ioa(box, boxes) == 1:
+            return True
+
+    return False
