@@ -237,6 +237,7 @@ def run(
         compute_afam=True
 ):
     compute_avam = 0
+    compute_afam = 0
     # Initialize/load model and set device
     training = model is not None
     if training:  # called by train.py
@@ -435,14 +436,9 @@ def run(
     avam_stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*avam_stats)] if compute_avam else []  # to numpy
     afam_stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*afam_stats)] if compute_afam else []  # to numpy
     afam_stats_ap = [torch.cat(x, 0).cpu().numpy() for x in zip(*afam_stats_ap)] if compute_afam else []  # to numpy
-    conf_classify, fp_classify, fn_classify = np.array(conf_classify), np.array(fp_classify), np.array(fn_classify)
-    order = np.argsort(conf_classify)
 
-    conf_classify, fp_classify, fn_classify = conf_classify[order], fp_classify[order], fn_classify[order]
-    fp_classify = fp_classify[::-1].cumsum(0)[::-1] / (totimg_empty + totimg_full)
-    fn_classify = fn_classify.cumsum(0) / (totimg_full + totimg_empty)
-    # plot_mc_curve(conf_classify, [1 - fp_classify, fp_classify, fn_classify, 1 - fn_classify],
-    # Path(save_dir) / 'classify.png', names=("TN", "FP", "FN", "TP"), x_label='Confidence')
+
+
     if len(stats) and stats[0].any():
         if compute_afam:
             afap, afar, afamf1, ap_afam = ap_per_class_afam(*afam_stats_ap, plot=plots, save_dir=save_dir, names=names)
