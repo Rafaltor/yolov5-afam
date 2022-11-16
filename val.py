@@ -201,9 +201,6 @@ def process_batch_afam(detections, labels, ioav, accurate_metrics):
 
                 union_preds_labels = torch.cat((union_preds_labels, intersection_pred_label[0].reshape(1,4)))
 
-        print(len(detections[correct_class[i]]), k)
-
-    print("afam", time() - t1)
     iops = torch.t(torch.t(iogs) / tools.boxes_area(detections[:, :4]))
     iogs = iogs / tools.boxes_area(labels[:, 1:])
 
