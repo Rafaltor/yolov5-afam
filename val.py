@@ -97,6 +97,7 @@ def process_batch(detections, labels, iouv):
                 # matches = matches[matches[:, 2].argsort()[::-1]]
                 matches = matches[np.unique(matches[:, 0], return_index=True)[1]]
             correct[matches[:, 1].astype(int), i] = True
+
     return correct
 
 
@@ -182,17 +183,25 @@ def process_batch_afam(detections, labels, ioav, accurate_metrics):
     t1 = time()
     for i, label in enumerate(labels[:, 1:5]):
         indexes = torch.where(correct_class[i])
-        label_area = tools.box_area(label)
+        inter = tools.get_intersection_from_list(detections[correct_class[i]], label)
+        max_label_area = tools.get_union_from_list(inter) - tools.get_union_from_list(
+            tools.get_intersection_between_list(inter,
+                                                labels[:i, 1:][labels[:i, 0] == labels[i, 0]]))
+        k = 0
+
         for j, pred in enumerate(detections[correct_class[i]]):
-            if tools.get_intersection_area_from_tuple(pred, label) != 0 and (iogs[correct_class[i], i].sum()) < 0.99*label_area:
+            if tools.get_intersection_area_from_tuple(pred, label) != 0 and (
+                    iogs[correct_class[i], i].sum()) < 0.99 * max_label_area:
+                k += 1
                 intersection_pred_label = tools.get_intersection_from_list([pred], label)[0]
 
                 union_preds_labels = torch.cat((labels[:i, 1:][labels[:i, 0] == labels[i, 0]],
                                                 detections[correct_class[i]][:j, :4]))
                 iogs[indexes[0][j], i] = tools.box_area(intersection_pred_label) - tools.get_union_from_list(
                     tools.get_intersection_from_list(union_preds_labels, intersection_pred_label))
+        print(len(detections[correct_class[i]]), k)
 
-
+    print("afam", time() - t1)
     iops = torch.t(torch.t(iogs) / tools.boxes_area(detections[:, :4]))
     iogs = iogs / tools.boxes_area(labels[:, 1:])
 
@@ -201,7 +210,6 @@ def process_batch_afam(detections, labels, ioav, accurate_metrics):
                             ioav.expand(len(detections), len(ioav))).sum(0), 1, 0,
                            prepend=torch.zeros(1, len(ioav), device=labels.device))
 
-    print(len(detections),time()-t1)
     return tp_recall, tp_precision, conf, detections[:, 5]
 
 
@@ -235,11 +243,8 @@ def run(
         callbacks=Callbacks(),
         compute_loss=None,
         final_epoch=True,
-        compute_avam=True,
         compute_afam=True
 ):
-    compute_avam = 0
-    compute_afam = 1
     # Initialize/load model and set device
     training = model is not None
     if training:  # called by train.py
@@ -315,12 +320,12 @@ def run(
     s = ('%20s' + '%11s' * 10) % ('Class', 'Images', 'Labels', 'P',
                                   'R', 'mAP@.5', 'mAP@.5:.95', 'afam_P', 'afam_R', 'avam_P', 'avam_R')
     dt, p, r, f1, mp, mr, map50, map = [0.0, 0.0, 0.0], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-    mr_afam, mp_afam, mr_avam, mp_avam, map50_afam, map_afam = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0  # AFA and AVA metrics
+    mr_afam, mp_afam, map50_afam, map_afam = 0.0, 0.0, 0.0, 0.0  # AFA metrics
     labels_area = 0.0  # AVA metrics (FA + TA)
     loss = torch.zeros(3, device=device)
     totimg_full, totimg_empty = 0, 0
     jdict, stats, ap, ap_class, ap50 = [], [], [], [], []
-    afam_stats, avam_stats, conf_classify, fp_classify, fn_classify, afam_stats_ap = [], [], [], [], [], []
+    afam_stats, afam_stats_ap = [], []
     callbacks.run('on_val_start')
     pbar = tqdm(dataloader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
@@ -384,25 +389,7 @@ def run(
                 if plots:
                     confusion_matrix.process_batch(predn, labels)
 
-                if predn.shape[0]:
-                    conf_classify.append(torch.max(predn[:, 4]))
-                    fn_classify.append(1)
-                    fp_classify.append(0)
-                totimg_full += 1
-            else:
-                if predn.shape[0]:
-                    conf_classify.append(torch.max(predn[:, 4]))
-                    fp_classify.append(1)
-                    fn_classify.append(0)
-
-                totimg_empty += 1
-
-            # Compute AVA and AFA metrics
-            if compute_avam:
-                # TA = True area, FA = False area, conf
-                correct_avam, incorrect_avam, conf, labels_area = process_batch_avam(predn, labels, labels_area,
-                                                                                     final_epoch)
-                avam_stats.append((correct_avam, incorrect_avam, conf))
+            # Compute AFA metrics
 
             if compute_afam:
                 # TP for recall, FP=(1-TP) for precision, conf
@@ -435,20 +422,13 @@ def run(
     # Compute metrics
 
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
-    avam_stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*avam_stats)] if compute_avam else []  # to numpy
     afam_stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*afam_stats)] if compute_afam else []  # to numpy
     afam_stats_ap = [torch.cat(x, 0).cpu().numpy() for x in zip(*afam_stats_ap)] if compute_afam else []  # to numpy
-
-
 
     if len(stats) and stats[0].any():
         if compute_afam:
             afap, afar, afamf1, ap_afam = ap_per_class_afam(*afam_stats_ap, plot=plots, save_dir=save_dir, names=names)
 
-        if compute_avam:
-            avap, avar = avam_per_class(*avam_stats, labels_area=labels_area.cpu(), plot=plots, save_dir=save_dir,
-                                        names=names)
-            mp_avam, mr_avam = avap.mean(), avar.mean()
         tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=plots, save_dir=save_dir, names=names)
         ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
         ap50_afam, ap_afam = ap_afam[:, 0], ap_afam.mean(1)  # AP@0.5, AP@0.5:0.95
@@ -460,10 +440,7 @@ def run(
         nt = torch.zeros(1)
 
     # Print results
-    if compute_afam and compute_avam:
-        pf = '%20s' + '%11i' * 2 + '%11.3g' * 8  # print format
-        LOGGER.info(pf % ('all', seen, nt.sum(), mp, mr, map50, map, mp_afam, mr_afam, mp_avam, mr_avam))
-    elif compute_afam:
+    if compute_afam:
         pf = '%20s' + '%11i' * 2 + '%11.3g' * 8  # print format
         LOGGER.info(pf % ('all', seen, nt.sum(), mp, mr, map50, map, mp_afam, mr_afam, map50_afam, map_afam))
     else:
@@ -527,7 +504,7 @@ def run(
                 "A class present on a validation label was not present during training. Please ensure that the validation dataset is correct")
         maps[c] = ap[i]
 
-    return (mp, mr, map50, map, mr_afam, mp_afam, mr_avam, mp_avam, *(loss.cpu() / len(dataloader)).tolist()), maps, t
+    return (mp, mr, map50, map, mr_afam, mp_afam, *(loss.cpu() / len(dataloader)).tolist()), maps, t
 
 
 def parse_opt():
