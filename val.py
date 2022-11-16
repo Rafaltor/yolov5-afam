@@ -188,17 +188,19 @@ def process_batch_afam(detections, labels, ioav, accurate_metrics):
             tools.get_intersection_between_list(inter,
                                                 labels[:i, 1:][labels[:i, 0] == labels[i, 0]]))
         k = 0
-
+        union_preds_labels = labels[:i, 1:][labels[:i, 0] == labels[i, 0]]
         for j, pred in enumerate(detections[correct_class[i]]):
-            if tools.get_intersection_area_from_tuple(pred, label) != 0 and (
+            intersection_pred_label = tools.get_intersection_from_list([pred], label)
+            if intersection_pred_label and (
                     iogs[correct_class[i], i].sum()) < 0.99 * max_label_area:
                 k += 1
-                intersection_pred_label = tools.get_intersection_from_list([pred], label)[0]
 
-                union_preds_labels = torch.cat((labels[:i, 1:][labels[:i, 0] == labels[i, 0]],
-                                                detections[correct_class[i]][:j, :4]))
-                iogs[indexes[0][j], i] = tools.box_area(intersection_pred_label) - tools.get_union_from_list(
-                    tools.get_intersection_from_list(union_preds_labels, intersection_pred_label))
+
+                iogs[indexes[0][j], i] = tools.box_area(intersection_pred_label[0]) - tools.get_union_from_list(
+                    tools.get_intersection_between_list(union_preds_labels, intersection_pred_label))
+
+                union_preds_labels = torch.cat((union_preds_labels, intersection_pred_label[0].reshape(1,4)))
+
         print(len(detections[correct_class[i]]), k)
 
     print("afam", time() - t1)
