@@ -184,15 +184,16 @@ def process_batch_afam(detections, labels, ioav, accurate_metrics):
     for i, label in enumerate(labels[:, 1:5]):
         indexes = torch.where(correct_class[i])
         inter = tools.get_intersection_from_list(detections[correct_class[i]], label)
-        max_label_area = tools.get_union_from_list(inter) - tools.get_union_from_list(
-            tools.get_intersection_between_list(inter,
-                                                labels[:i, 1:][labels[:i, 0] == labels[i, 0]]))
+        #max_label_area = tools.get_union_from_list(inter) - tools.get_union_from_list(
+            #tools.get_intersection_between_list(inter,
+                                                               #labels[:i, 1:][labels[:i, 0] == labels[i, 0]]))
         k = 0
+        label_area = tools.box_area(label)
         union_preds_labels = labels[:i, 1:][labels[:i, 0] == labels[i, 0]]
         for j, pred in enumerate(detections[correct_class[i]]):
             intersection_pred_label = tools.get_intersection_from_list([pred], label)
             if intersection_pred_label and (
-                    iogs[correct_class[i], i].sum()) < 0.99 * max_label_area:
+                    iogs[correct_class[i], i].sum()) < 0.99 * label_area:
                 k += 1
 
                 iogs[indexes[0][j], i] = tools.box_area(intersection_pred_label[0]) - tools.get_union_from_list(
