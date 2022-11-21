@@ -1,5 +1,5 @@
 # YOLOv5 🚀 by Ultralytics, GPL-3.0 license
-# Rafalor metrics for AFAM
+# Metrics AFAM by Rafaltor
 
 """
 Validate a trained YOLOv5 model accuracy on a custom dataset
@@ -22,8 +22,7 @@ Usage - formats:
 
 from utils.torch_utils import select_device, time_sync
 from utils.plots import output_to_target, plot_images, plot_val_study
-from utils.metrics import ConfusionMatrix, ap_per_class, box_iou, afam_per_class, avam_per_class, plot_mc_curve, \
-    ap_per_class_afam
+from utils.metrics import ConfusionMatrix, ap_per_class, box_iou, afam_per_class, plot_pr_comparison
 from utils.general import (LOGGER, check_dataset, check_img_size, check_requirements, check_yaml,
                            coco80_to_coco91_class, colorstr, emojis, increment_path, non_max_suppression, print_args,
                            scale_coords, xywh2xyxy, xyxy2xywh)
@@ -32,7 +31,6 @@ from utils.callbacks import Callbacks
 from models.common import DetectMultiBackend
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 import tools
@@ -40,6 +38,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 from time import time
+import os
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
@@ -101,51 +100,6 @@ def process_batch(detections, labels, iouv):
     return correct
 
 
-def process_batch_avam(detections, labels, labels_area, accurate_metrics=False):
-    """
-    Return correct and incorrect area prediction matrix according to the AVA metrics.
-    Both sets of boxes are in (x1, y1, x2, y2) format.
-    Arguments:
-        detections (Array[N, 6]), x1, y1, x2, y2, conf, class
-        labels (Array[M, 5]), class, x1, y1, x2, y2
-        labels_area (Float) Total area of labels boxes
-        accurate_metrics (Boolean) light or big calcul for the metrics
-                False during training, True for validation
-    Returns:
-        correct_area (Array[min(N;M+3)/min(N;M+30),1]), vector of the correct area predicted
-        correct_area (Array[min(N;M+3)/min(N;M+30),1]), vector of the incorrect area predicted
-        conf (Array[min(N;M+3)/min(N;M+30),1]), conf ordered and reduced
-    """
-
-    conf = detections[:, 4]
-    order = np.argsort(-conf.cpu())
-    conf, detections = conf[order], detections[order]
-    # FA + TA for recall
-    labels_area += tools.get_union_from_list(list(labels[:, 1:5]))
-
-    # Reduction of the detections vector
-    if accurate_metrics:
-        conf = conf[:min(len(detections), len(labels) + 30)]
-        detections = detections[:min(len(detections), len(labels) + 30)]
-    else:
-        conf = conf[:min(len(detections), len(labels) + 3)]
-        detections = detections[:min(len(detections), len(labels) + 3)]
-
-    # Output vectors
-    correct_area, incorrect_area = torch.zeros(len(
-        detections), 1, device=labels.device), torch.zeros(len(detections), 1, device=labels.device)
-
-    for i, box in enumerate(detections):
-        correct_area[i] = tools.get_union_from_list(tools.get_intersection_between_list(labels[:, 1:], [box])) \
-                          - tools.get_union_from_list(tools.get_intersection_between_list(
-            tools.get_intersection_between_list(detections[:i, :4], [box]), labels[:, 1:]))
-
-        incorrect_area[i] = tools.box_area(box) - correct_area[i] - tools.get_union_from_list(
-            tools.get_intersection_between_list(detections[:i, :4], [box]))
-
-    return correct_area, incorrect_area, conf, labels_area
-
-
 def process_batch_afam(detections, labels, ioav, accurate_metrics):
     """
     Return correct and incorrect prediction matrix according to the AFA metrics.
@@ -172,33 +126,22 @@ def process_batch_afam(detections, labels, ioav, accurate_metrics):
     if not accurate_metrics:
         conf, detections = conf[:min(len(detections), len(labels))], detections[:min(len(detections), len(labels))]
 
-    # Output vectors
-    tp_precision = torch.ones(detections.shape[0], len(ioav), dtype=torch.bool, device=labels.device)
-    tp_recall = torch.zeros(detections.shape[0], len(ioav), device=labels.device)
     # Computation vectors
     iogs = torch.zeros(detections.shape[0], labels.shape[0], device=labels.device)  # Input over Ground Truth
-    iops = torch.zeros(detections.shape[0], labels.shape[0], device=labels.device)  # Input over Predictions
-    box_found = []
     correct_class = detections[:, 5] == labels[:, 0:1]
-    t1 = time()
+
     for i, label in enumerate(labels[:, 1:5]):
         indexes = torch.where(correct_class[i])
-        inter = tools.get_intersection_from_list(detections[correct_class[i]], label)
-        #max_label_area = tools.get_union_from_list(inter) - tools.get_union_from_list(
-            #tools.get_intersection_between_list(inter,
-                                                               #labels[:i, 1:][labels[:i, 0] == labels[i, 0]]))
-        k = 0
         label_area = tools.box_area(label)
         union_preds_labels = labels[:i, 1:][labels[:i, 0] == labels[i, 0]]
+
         for j, pred in enumerate(detections[correct_class[i]]):
             intersection_pred_label = tools.get_intersection_from_list([pred], label)
-            if intersection_pred_label and (
-                    iogs[correct_class[i], i].sum()) < 0.99 * label_area:
-                k += 1
+            if intersection_pred_label and (iogs[correct_class[i], i].sum()) < 0.99 * label_area:
 
                 iogs[indexes[0][j], i] = tools.box_area(intersection_pred_label[0]) - tools.get_union_from_list(
                     tools.get_intersection_between_list(union_preds_labels, intersection_pred_label))
-                if iogs[indexes[0][j], i] > 1:
+                if iogs[indexes[0][j], i] > 10:
                     union_preds_labels = torch.cat((union_preds_labels, intersection_pred_label[0].reshape(1, 4)))
 
     iops = torch.t(torch.t(iogs) / tools.boxes_area(detections[:, :4]))
@@ -245,7 +188,9 @@ def run(
         compute_afam=True
 ):
     # Initialize/load model and set device
+
     training = model is not None
+
     if training:  # called by train.py
         # get model device, PyTorch model
         device, pt, jit, engine = next(
@@ -314,17 +259,16 @@ def run(
     confusion_matrix = ConfusionMatrix(nc=nc)
     names = {k: v for k, v in enumerate(
         model.names if hasattr(model, 'names') else model.module.names)}
-    afam_names = tuple(np.round(np.array(iouv.cpu()), 2).tolist())
     class_map = coco80_to_coco91_class() if is_coco else list(range(1000))
-    s = ('%20s' + '%11s' * 10) % ('Class', 'Images', 'Labels', 'P',
-                                  'R', 'mAP@.5', 'mAP@.5:.95', 'afam_P', 'afam_R', 'avam_P', 'avam_R')
+    s = ('%20s' + '%11s' * 6) % ('Class', 'Images', 'Labels', 'P',
+                                 'R', 'mAP@.5', 'mAP@.5:.95')
+    s_afam = ('%20s' + '%11s' * 8) % ('Metrics', 'P', 'R', 'mAP@.5', 'mAP@.5:.95', 'mAP@.75', 'AP_s', 'AP_m', 'AP_l')
     dt, p, r, f1, mp, mr, map50, map = [0.0, 0.0, 0.0], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-    mr_afam, mp_afam, map50_afam, map_afam = 0.0, 0.0, 0.0, 0.0  # AFA metrics
-    labels_area = 0.0  # AVA metrics (FA + TA)
+    mr_afam, mp_afam, map50_afam, map_afam = 0.0, 0.0, 0.0, 0.0  # AFA metrics no class
+    mr_cafam, mp_cafam, map50_cafam, map_cafam = 0.0, 0.0, 0.0, 0.0  # AFA metrics per class
     loss = torch.zeros(3, device=device)
-    totimg_full, totimg_empty = 0, 0
     jdict, stats, ap, ap_class, ap50 = [], [], [], [], []
-    afam_stats, afam_stats_ap = [], []
+    afam_stats = []
     callbacks.run('on_val_start')
     pbar = tqdm(dataloader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
@@ -394,8 +338,7 @@ def run(
                 # TP for recall, FP=(1-TP) for precision, conf
                 correct_rec_afam, correct_prec_afam, conf, pred_class = process_batch_afam(predn, labels, iouv_afam,
                                                                                            final_epoch)
-                afam_stats.append((correct_rec_afam, correct_prec_afam, conf, labels[:, 0]))
-                afam_stats_ap.append((correct_rec_afam, correct_prec_afam, conf, pred_class, labels[:, 0]))
+                afam_stats.append((correct_rec_afam, correct_prec_afam, conf, pred_class, labels[:, 0]))
 
             # (correct, conf, pcls, tcls)
 
@@ -422,17 +365,23 @@ def run(
 
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
     afam_stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*afam_stats)] if compute_afam else []  # to numpy
-    afam_stats_ap = [torch.cat(x, 0).cpu().numpy() for x in zip(*afam_stats_ap)] if compute_afam else []  # to numpy
 
     if len(stats) and stats[0].any():
+        tp, fp, p, r, f1, ap, ap_class, py = ap_per_class(*stats, plot=plots, save_dir=save_dir, names=names)
         if compute_afam:
-            afap, afar, afamf1, ap_afam = ap_per_class_afam(*afam_stats_ap, plot=plots, save_dir=save_dir, names=names)
+            cafap, cafar, cafam_f1, ap_cafam, afap, afar, afam_f1, ap_afam, px, py_cafam, py_afam = \
+                afam_per_class(*afam_stats, compute_noclass=True, plot=plots, save_dir=save_dir, names=names)
+            if plots:
+                plot_pr_comparison(px, np.array([py, py_cafam, py_afam]), Path(save_dir) / 'PR_curves.png')
 
-        tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=plots, save_dir=save_dir, names=names)
+            ap50_cafam, ap_cafam = ap_cafam[:, 0], ap_cafam.mean(1)  # AP@0.5, AP@0.5:0.95
+            ap50_afam, ap_afam = ap_afam[:, 0], ap_afam.mean(1)  # AP@0.5, AP@0.5:0.95
+            mp_cafam, mr_cafam, map50_cafam, map_cafam, = cafap.mean(), cafar.mean(), ap50_cafam.mean(), ap_cafam.mean()
+            mp_afam, mr_afam, map50_afam, map_afam, = afap.mean(), afar.mean(), ap50_afam.mean(), ap_afam.mean()
+
         ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
-        ap50_afam, ap_afam = ap_afam[:, 0], ap_afam.mean(1)  # AP@0.5, AP@0.5:0.95
         mp, mr, map50, map, = p.mean(), r.mean(), ap50.mean(), ap.mean()
-        mp_afam, mr_afam, map50_afam, map_afam, = afap.mean(), afar.mean(), ap50_afam.mean(), ap_afam.mean()
+
         # number of targets per class
         nt = np.bincount(stats[3].astype(int), minlength=nc)
     else:
@@ -440,8 +389,12 @@ def run(
 
     # Print results
     if compute_afam:
-        pf = '%20s' + '%11i' * 2 + '%11.3g' * 8  # print format
-        LOGGER.info(pf % ('all', seen, nt.sum(), mp, mr, map50, map, mp_afam, mr_afam, map50_afam, map_afam))
+        pf = '%20s' + '%11.3g' * 8  # print format
+        LOGGER.info(pf % ('all', seen, nt.sum(), mp, mr, map50, map))
+        LOGGER.info(s_afam)
+        LOGGER.info(pf % ('AFAM_class', mp_cafam, mr_cafam, map50_cafam, map_cafam))
+        LOGGER.info(s_afam)
+        LOGGER.info(pf % ('AFAM_noClass', mp_afam, mr_afam, map50_afam, map_afam))
     else:
         pf = '%20s' + '%11i' * 2 + '%11.3g' * 4  # print format
         LOGGER.info(pf % ('all', seen, nt.sum(), mp, mr, map50, map))

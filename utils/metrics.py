@@ -102,10 +102,11 @@ def ap_per_class(tp, conf, pred_cls, target_cls, plot=False, save_dir='.', names
     p, r, f1 = p[:, i], r[:, i], f1[:, i]
     tp = (r * nt).round()  # true positives
     fp = (tp / (p + eps) - tp).round()  # false positives
-    return tp, fp, p, r, f1, ap, unique_classes.astype(int)
+    return tp, fp, p, r, f1, ap, unique_classes.astype(int), np.array(py).mean(0)
 
 
-def ap_per_class_afam(tp_recall, tp_precision, conf, pred_cls, target_cls, plot=False, save_dir='.', names=(), eps=1e-16):
+def afam_per_class(tp_recall, tp_precision, conf, pred_cls, target_cls,
+                   compute_noclass=False, plot=False, save_dir='.', names=(), eps=1e-16):
     """ Compute the average precision, given the recall and precision curves.
     Source: https://github.com/rafaelpadilla/Object-Detection-Metrics.
     # Arguments
@@ -130,7 +131,7 @@ def ap_per_class_afam(tp_recall, tp_precision, conf, pred_cls, target_cls, plot=
     # Create Precision-Recall curve and compute AP for each class
     px, py = np.linspace(0, 1, 1000), []  # for plotting
 
-    ap, p, r = np.zeros((nc, tp_recall.shape[1])), np.zeros(
+    ap, afap, afar = np.zeros((nc, tp_recall.shape[1])), np.zeros(
         (nc, 1000)), np.zeros((nc, 1000))
     for ci, c in enumerate(unique_classes):
         i = pred_cls == c
@@ -148,11 +149,11 @@ def ap_per_class_afam(tp_recall, tp_precision, conf, pred_cls, target_cls, plot=
         # Recall
         recall = tpc_recall / (n_l + eps)  # recall curve
         # negative x, xp because xp decreases
-        r[ci] = np.interp(-px, -conf[i], recall[:, 0], left=0)
+        afar[ci] = np.interp(-px, -conf[i], recall[:, 0], left=0)
 
         # Precision
         precision = tpc_precision / (tpc_precision + fpc_precision)  # precision curve
-        p[ci] = np.interp(-px, -conf[i], precision[:, 0], left=1)  # p at pr_score
+        afap[ci] = np.interp(-px, -conf[i], precision[:, 0], left=1)  # p at pr_score
 
         # AP from recall-precision curve
         for j in range(tp_recall.shape[1]):
@@ -162,156 +163,63 @@ def ap_per_class_afam(tp_recall, tp_precision, conf, pred_cls, target_cls, plot=
 
     # Computes the custom metrics to achieve a satisfying tradeoff between
     # p and r
-    f1 = 2 * p * r / (p + r + eps)
+    f1 = 2 * afap * afar / (afap + afar + eps)
     # list: only classes that have data
     if plot:
         plot_pr_curve(px, py, ap, Path(save_dir) / 'PR_curve_afam.png', names)
         plot_mc_curve(px, f1, Path(save_dir) / 'F1_curve_afam.png', names, y_label='F1')
-        plot_mc_curve(px, p, Path(save_dir) / 'P_curve_afam.png', names, y_label='Precision')
-        plot_mc_curve(px, r, Path(save_dir) / 'R_curve_afam.png', names, y_label='Recall')
+        plot_mc_curve(px, afap, Path(save_dir) / 'P_curve_afam.png', names, y_label='Precision')
+        plot_mc_curve(px, afar, Path(save_dir) / 'R_curve_afam.png', names, y_label='Recall')
 
-        torch.save(p, Path(save_dir) / 'precision.pt')
-        torch.save(r, Path(save_dir) / 'recall.pt')
+        torch.save(afap, Path(save_dir) / 'precision.pt')
+        torch.save(afar, Path(save_dir) / 'recall.pt')
         torch.save(f1, Path(save_dir) / 'f1.pt')
         torch.save(px, Path(save_dir) / 'confidence.pt')
 
     i = smooth(f1.mean(0), 0.1).argmax()
-    p, r, f1 = p[:, i], r[:, i], f1[:, i]
-    return p, r, f1, ap
+    afap, afar, f1 = afap[:, i], afar[:, i], f1[:, i]
 
-def avam_per_class(ta, fa, conf, labels_area, plot=False, save_dir='.', names=(), eps=1e-16):
-    """
-    Compute the Average Area metrics, given the True Area et False Area matrix.
-    Arguments:
-        ta : True area (nparray[N,1]).
-        fa : False area (nparray[N,1])
-        conf : Confidence value from 0-1 (nparray[N,1]).
-        labels_area : (Float) Total area of the labels boxes
-        plot : (Boolean) Plot curves
-        names : (Tuple) Legend for plot
-        save_dir  (Path) Plot save directory
-    # Returns
-        The average area precision and recall
-    """
+    if compute_noclass:
+        # Create Precision-Recall curve
+        px, py_nc = np.linspace(0, 1, 1000), []  # for plotting
+        ap_nc, afap_nc, afar_nc = np.zeros((1, tp_recall.shape[1])), np.zeros(
+            (1, 1000)), np.zeros((1, 1000))
 
-    # Sort by confidence
-    order = np.argsort(-conf)
-    ta, fa, conf = ta[order], fa[order], conf[order]
+        tp_labelsc = tp_recall.cumsum(0)
+        tp_predc = tp_precision.cumsum(0)
+        fp_predc = (1 - tp_precision).cumsum(0)
 
-    # Create Precision-Recall curve and compute AP for each class
-    px, py = np.linspace(0, 1, 1000), []  # for plotting
-    ap, avap, avar = np.zeros((1, ta.shape[1])), np.zeros((1, 1000)), np.zeros((1, 1000))
-
-    tac = ta.cumsum(0)
-    fac = fa.cumsum(0)
-
-    # Recall
-    recall = tac / (labels_area + eps)  # recall curve
-    # negative x, xp because xp decreases
-    avar[0] = np.interp(-px, -conf, recall[:, 0], left=0)
-
-    # Precision
-    precision = tac / (fac + tac)  # precision curve
-    avap[0] = np.interp(-px, -conf, precision[:, 0], left=1)  # p at pr_score
-
-    # AP from recall-precision curve
-    for j in range(ta.shape[1]):
-        ap[0, j], mpre, mrec = compute_ap(recall[:, j], precision[:, j])
-        if plot and j == 0:
-            py.append(np.interp(px, mrec, mpre))  # precision at mAP@0.5
-
-    # Compute F1
-    f1 = 2 * avap * avar / (avap + avar + eps)
-
-    if plot:
-        plot_pr_curve(px, py, ap, Path(save_dir) / 'PR_curve_avam.png', names)
-        plot_mc_curve(px, f1, Path(save_dir) / 'F1_curve_avam.png', names, y_label='F1')
-        plot_mc_curve(px, avap, Path(save_dir) / 'P_curve_avam.png', names, y_label='AVAP')
-        plot_mc_curve(px, avar, Path(save_dir) / 'R_curve_avam.png', names, y_label='AVAR')
-
-        torch.save(avap, Path(save_dir) / 'precision_area.pt')
-        torch.save(avar, Path(save_dir) / 'recall_area.pt')
-        torch.save(f1, Path(save_dir) / 'f1_area.pt')
-
-    i = smooth(f1.mean(0), 0.1).argmax()  # max F1 index
-    avap, avar = avap[:, i], avar[:, i]
-
-    return avap, avar
-
-
-def afam_per_class(tp_labels, tp_pred, conf, target_cls, plot=False, save_dir='.', names=(), eps=1e-16):
-    """ Compute the average precision, given the recall and precision curves.
-    # Arguments
-        tp_labels  True positives regarding the labels (nparray[N,len(ioav)])
-        fp_pred  False positives regarding the prediction (nparray[N,len(ioav)])
-        conf  Confidence value from 0-1 (nparray[N,1])
-        target_cls  True object classes (nparray[M,1]).
-        plot  Plot curves
-        save_dir  Plot save directory
-    # Returns
-        The average "Any For Any" precision and recall
-    """
-
-    # Sort by confidence
-    order = np.argsort(-conf)
-    tp_labels, tp_pred, conf = tp_labels[order], tp_pred[order], conf[order]
-    ntot = target_cls.shape[0]
-
-    # Create Precision-Recall curve
-    px, py = np.linspace(0, 1, 1000), []  # for plotting
-    ap, afap, afar = np.zeros((tp_labels.shape[0], tp_labels.shape[1])), np.zeros(
-        (tp_labels.shape[1], 1000)), np.zeros((tp_labels.shape[1], 1000))
-
-    tp_labelsc = tp_labels.cumsum(0)
-    tp_predc = tp_pred.cumsum(0)
-    fp_predc = (1-tp_pred).cumsum(0)
-
-    # Recall
-    recall = tp_labelsc / (ntot + eps)
-    # Precision
-    precision = tp_predc / (fp_predc + tp_predc)
-
-    # Compute precision and recall curve for each ioa thresholds
-    for i in range(tp_labels.shape[1]):
         # Recall
-        afar[i, :] = np.interp(-px, -conf, recall[:, i], left=0)
+        recall = tp_labelsc / (target_cls.shape[0] + eps)  # recall curve
+        # negative x, xp because xp decreases
+        afar_nc[0] = np.interp(-px, -conf, recall[:, 0], left=0)
+
         # Precision
-        afap[i, :] = np.interp(-px, -conf, precision[:, i], left=1)  # p at pr_score
+        precision = tp_predc / (tp_predc + fp_predc)  # precision curve
+        afap_nc[0] = np.interp(-px, -conf, precision[:, 0], left=1)  # p at pr_score
 
-    # AP from recall-precision curve
-    for j in range(tp_labels.shape[1]):
-        ap[0, j], mpre, mrec = compute_ap(recall[:, j], precision[:, j])
-        if plot:
-            py.append(np.interp(px, mrec, mpre))
+        # AP from recall-precision curve
+        for j in range(tp_recall.shape[1]):
+            ap_nc[0, j], mpre, mrec = compute_ap(recall[:, j], precision[:, j])
+            if plot and j == 0:
+                py_nc.append(np.interp(px, mrec, mpre))  # precision at mAP@0.5
 
-    # Compute F1
-    f1 = 2 * afar * afap / (afap + afar + eps)
-    print(afar.shape)
-    if plot:
-        plot_pr_curve(px, py, ap, Path(save_dir) / 'PR_curve_afam.png', names=names)
-        plot_mc_curve(px, f1, Path(save_dir) / 'F1_curve_afam.png', names=names, y_label='F1')
-        plot_mc_curve(px, afap, Path(save_dir) / 'P_curve_afam.png', names=names, y_label='AFAP')
-        plot_mc_curve(px, afar, Path(save_dir) / 'R_curve_afam.png', names=names, y_label='AFAR')
-        plot_mc_curve(list(names), np.transpose(afar[:,np.linspace(0,999,11).astype(int)]), Path(save_dir) / 'afar.png',
-                      names=tuple(np.round(np.linspace(0, 1, 11), 2).tolist()),
-                      y_label='Recall',
-                      x_label='Ioa threshold')
-        plot_mc_curve(list(names), np.transpose(afap[:,np.linspace(0,999,11).astype(int)]), Path(save_dir) / 'afap.png',
-                      names=tuple(np.round(np.linspace(0, 1, 11), 2).tolist()),
-                      y_label='Precision',
-                      x_label='Ioa threshold')
-        plot_mc_curve(list(names), [afap[:, 200],afar[:,200]], Path(save_dir) / 'afa_at_035.png',
-                      names=('AFAP','AFAR'),
-                      x_label='Ioa threshold')
+        # Computes the custom metrics to achieve a satisfying tradeoff between
+        # p and r
+        f1_nc = 2 * afap_nc * afar_nc / (afap_nc + afar_nc + eps)
 
-        torch.save(afap, Path(save_dir) / 'custom_precision.pt')
-        torch.save(afar, Path(save_dir) / 'custom_recall.pt')
-        torch.save(f1, Path(save_dir) / 'custom_f1.pt')
+        plot_pr_curve(px, py_nc, ap_nc, Path(save_dir) / 'PR_curve_afam_nc.png')
+        plot_mc_curve(px, f1_nc, Path(save_dir) / 'F1_curve_afam_nc.png', y_label='F1')
+        plot_mc_curve(px, afap_nc, Path(save_dir) / 'P_curve_afam_nc.png', y_label='Precision')
+        plot_mc_curve(px, afar_nc, Path(save_dir) / 'R_curve_afam_nc.png', y_label='Recall')
 
-    i = smooth(f1.mean(0), 0.1).argmax()  # max F1 index
-    afap, afar = afap[:, i], afar[:, i]
+        i = smooth(f1_nc.mean(0), 0.1).argmax()  # max F1 index
+        afap_nc, afar_nc = afap_nc[:, i], afar_nc[:, i]
 
-    return afap, afar
+        return afap, afar, f1, ap, afap_nc, afar_nc, f1_nc, ap_nc, px, np.array(py).mean(0), np.array(py_nc).mean(0)
+
+    else:
+        return afap, afar, f1, ap, px, np.array(py).mean(0)
 
 
 def compute_ap(recall, precision):
@@ -579,7 +487,7 @@ def plot_pr_curve(px, py, ap, save_dir=Path('pr_curve.png'), names=()):
         ax.plot(px, py, linewidth=1, color='grey')  # plot(recall, precision)
 
     ax.plot(px, py.mean(1), linewidth=3, color='blue',
-    label='all classes %.3f mAP@0.5' % ap[:, 0].mean())
+            label='all classes %.3f mAP@0.5' % ap[:, 0].mean())
     ax.set_xlabel('Recall')
     ax.set_ylabel('Precision')
     ax.set_xlim(0, 1)
@@ -605,6 +513,22 @@ def plot_mc_curve(px, py, save_dir=Path('mc_curve.png'), names=(), x_label='Conf
     ax.plot(px, y, linewidth=3, color='blue', label=f'all classes {y.max():.2f} at {px[y.argmax()]:.3f}')
     ax.set_xlabel(x_label)
     ax.set_ylabel(y_label)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+    fig.savefig(save_dir, dpi=250)
+    plt.close()
+
+
+def plot_pr_comparison(px, py, save_dir=Path('pr_curves.png')):
+    # Precision-recall curve
+    fig, ax = plt.subplots(1, 1, figsize=(9, 6), tight_layout=True)
+
+    ax.plot(px, py[0], linewidth=3, color='blue', label='Classique')
+    ax.plot(px, py[1], linewidth=3, color='red', label='Afam per class')
+    ax.plot(px, py[2], linewidth=3, color='green', label='Afam no class')
+    ax.set_xlabel('Recall')
+    ax.set_ylabel('Precision')
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
