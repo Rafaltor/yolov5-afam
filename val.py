@@ -262,7 +262,7 @@ def run(
     class_map = coco80_to_coco91_class() if is_coco else list(range(1000))
     s = ('%20s' + '%11s' * 6) % ('Class', 'Images', 'Labels', 'P',
                                  'R', 'mAP@.5', 'mAP@.5:.95')
-    s_afam = ('%20s' + '%11s' * 8) % ('Metrics', 'P', 'R', 'mAP@.5', 'mAP@.5:.95', 'mAP@.75', 'AP_s', 'AP_m', 'AP_l')
+    s_afam = ('%20s' + '%11s' * 8) % ('Metrics', 'P', 'R', 'mAP@.5', 'mAP@.75', 'mAP@.5:.95', 'AP_s', 'AP_m', 'AP_l')
     dt, p, r, f1, mp, mr, map50, map, map75, maps, mapm, mapl = [0.0, 0.0, 0.0], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     mr_afam, mp_afam, map50_afam, map_afam, map_afam75, maps_afam, mapm_afam, mapl_afam = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0  # AFA metrics no class
     mr_cafam, mp_cafam, map50_cafam, map_cafam, map75_cafam, maps_cafam, mapm_cafam, mapl_cafam = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0  # AFA metrics per class
@@ -347,7 +347,6 @@ def run(
                                                                                            final_epoch)
                 afam_stats_class.append((correct_rec_afam, correct_prec_afam, conf, pred_class, labels[:, 0]))
                 afam_stats_size.append((correct_rec_afam, correct_prec_afam, conf, pred_size, labels_size))
-            # (correct, conf, pcls, tcls)
 
             stats_class.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))
             stats_size.append((correct, correct, pred[:, 4], pred_size, labels_size))
@@ -391,7 +390,7 @@ def run(
             mp_afam, mr_afam, map50_afam, map_afam, map75_afam = afap.mean(), afar.mean(), ap50_afam.mean(), ap_afam.mean(), ap75_afam
 
         ap50, ap75,  ap = ap[:, 0], ap[:, 5], ap.mean(1)  # AP@0.5, AP@0.5:0.95
-        mp, mr, map50, map, = p.mean(), r.mean(), ap50.mean(), ap.mean()
+        mp, mr, map50, map, map75 = p.mean(), r.mean(), ap50.mean(), ap.mean(), ap75.mean()
 
         # number of targets per class
         nt = np.bincount(stats_class[3].astype(int), minlength=nc)
@@ -403,11 +402,11 @@ def run(
         pf = '%20s' + '%11.3g' * 8  # print format
         LOGGER.info(('%20s' + '%11.3g' * 6) % ('all', seen, nt.sum(), mp, mr, map50, map))
         LOGGER.info(s_afam)
-        LOGGER.info(pf % ('Coco', mp, mr, map50, map75, map, ap_size[:, 0].mean(), ap_size[:, 1].mean(), ap_size[:, 2].mean()))
+        LOGGER.info(pf % ('Coco', mp, mr, map50, map75, map, ap_size[0].mean(), ap_size[1].mean(), ap_size[2].mean()))
         LOGGER.info(s_afam)
         LOGGER.info(pf % ('AFAM_class', mp_cafam, mr_cafam, map50_cafam, map75_cafam, map_cafam,
-                          ap_afam_size[:, 0].mean(), ap_afam_size[:, 1].mean(), ap_afam_size[:, 2].mean()))
-        LOGGER.info(('%20s' + '%11s' * 5) % ('Metrics', 'P', 'R', 'mAP@.5', 'mAP@.5:.95', 'mAP@.75'))
+                          ap_afam_size[0].mean(), ap_afam_size[1].mean(), ap_afam_size[2].mean()))
+        LOGGER.info(('%20s' + '%11s' * 5) % ('Metrics', 'P', 'R', 'mAP@.5', 'map@.75',  'mAP@.5:.95'))
         LOGGER.info(('%20s' + '%11.3g' * 5) % ('AFAM_noClass', mp_afam, mr_afam, map50_afam, map75_afam, map_afam))
     else:
         pf = '%20s' + '%11i' * 2 + '%11.3g' * 4  # print format
