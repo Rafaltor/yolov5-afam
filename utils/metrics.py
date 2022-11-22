@@ -105,6 +105,73 @@ def ap_per_class(tp, conf, pred_cls, target_cls, plot=False, save_dir='.', names
     return tp, fp, p, r, f1, ap, unique_classes.astype(int), np.array(py).mean(0)
 
 
+def ap_per_size(tp_recall, tp_precision, conf, pred_size_cls, target_size_cls, plot=False, save_dir='.', names=(), eps=1e-16):
+    """ Compute the average precision, given the recall and precision curves.
+    Source: https://github.com/rafaelpadilla/Object-Detection-Metrics.
+    # Arguments
+        tp:  True positives (nparray, nx1 or nx10).
+        conf:  Confidence value from 0-1 (nparray).
+        pred_cls:  Predicted object classes (nparray).
+        target_cls:  True object classes (nparray).
+        size_cls: categorie for the size of the box (nparray).
+        plot:  Plot precision-recall curve at mAP@0.5
+        save_dir:  Plot save directory
+    # Returns
+        The average precision as computed in py-faster-rcnn.
+    """
+
+    # Sort by Confidence
+    i = np.argsort(-conf)
+    tp_recall, tp_precision, conf, pred_size_cls = tp_recall[i], tp_precision[i], conf[i], pred_size_cls[i]
+
+    # Find unique classes
+    unique_size, nt = np.unique(target_size_cls, return_counts=True)
+    nc = unique_size.shape[0]  # number of classes, number of detections
+
+    # Create Precision-Recall curve and compute AP for each class
+    px, py = np.linspace(0, 1, 1000), []  # for plotting
+
+    ap, p, r = np.zeros((nc, tp_recall.shape[1])), np.zeros(
+        (nc, 1000)), np.zeros((nc, 1000))
+    for ci, c in enumerate(unique_size):
+        i = pred_size_cls == c
+
+        n_l = nt[ci]  # number of labels
+        n_p = i.sum()  # number of predictions
+        if n_p == 0 or n_l == 0:
+            continue
+
+        # Accumulate FPs and TPs
+        tpc_recall = tp_recall[i].cumsum(0)
+        tpc_precision = tp_precision[i].cumsum(0)
+        fpc_precision = (1 - tp_precision[i]).cumsum(0)
+        # Recall
+        recall = tpc_recall / (n_l + eps)  # recall curve
+        # negative x, xp because xp decreases
+        r[ci] = np.interp(-px, -conf[i], recall[:, 0], left=0)
+
+        # Precision
+        precision = tpc_precision / (tpc_precision + fpc_precision)  # precision curve
+        p[ci] = np.interp(-px, -conf[i], precision[:, 0], left=1)  # p at pr_score
+
+        # AP from recall-precision curve
+        for j in range(tp_recall.shape[1]):
+            ap[ci, j], mpre, mrec = compute_ap(recall[:, j], precision[:, j])
+            if plot and j == 0:
+                py.append(np.interp(px, mrec, mpre))  # precision at mAP@0.5
+
+    # Computes the custom metrics to achieve a satisfying tradeoff between
+    # p and r
+    f1 = 2 * p * r / (p + r + eps)
+    # list: only classes that have data
+    if plot:
+        plot_pr_curve(px, py, ap, Path(save_dir) / 'PR_curve_size.png')
+        plot_mc_curve(px, f1, Path(save_dir) / 'F1_curve_size.png', y_label='F1')
+        plot_mc_curve(px, p, Path(save_dir) / 'P_curve_size.png', y_label='Precision')
+        plot_mc_curve(px, r, Path(save_dir) / 'R_curve_size.png', y_label='Recall')
+
+    return ap
+
 def afam_per_class(tp_recall, tp_precision, conf, pred_cls, target_cls,
                    compute_noclass=False, plot=False, save_dir='.', names=(), eps=1e-16):
     """ Compute the average precision, given the recall and precision curves.

@@ -22,7 +22,7 @@ Usage - formats:
 
 from utils.torch_utils import select_device, time_sync
 from utils.plots import output_to_target, plot_images, plot_val_study
-from utils.metrics import ConfusionMatrix, ap_per_class, box_iou, afam_per_class, plot_pr_comparison
+from utils.metrics import ConfusionMatrix, ap_per_class, ap_per_size, box_iou, afam_per_class, plot_pr_comparison
 from utils.general import (LOGGER, check_dataset, check_img_size, check_requirements, check_yaml,
                            coco80_to_coco91_class, colorstr, emojis, increment_path, non_max_suppression, print_args,
                            scale_coords, xywh2xyxy, xyxy2xywh)
@@ -39,7 +39,7 @@ import torch
 from tqdm import tqdm
 from time import time
 import os
-
+os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
 if str(ROOT) not in sys.path:
@@ -84,6 +84,7 @@ def process_batch(detections, labels, iouv):
     correct = torch.zeros(detections.shape[0], iouv.shape[0], dtype=torch.bool, device=iouv.device)
     iou = box_iou(labels[:, 1:], detections[:, :4])
     correct_class = labels[:, 0:1] == detections[:, 5]
+
 
     for i in range(len(iouv)):
         # IoU > threshold and classes match
@@ -184,7 +185,7 @@ def run(
         plots=True,
         callbacks=Callbacks(),
         compute_loss=None,
-        final_epoch=True,
+        final_epoch=False,
         compute_afam=True
 ):
     # Initialize/load model and set device
@@ -230,7 +231,6 @@ def run(
         f'coco{os.sep}val2017.txt')  # COCO dataset
     nc = 1 if single_cls else int(data['nc'])  # number of classes
     iouv = torch.linspace(0.5, 0.95, 10, device=device)  # iou vector for mAP@0.5:0.95
-    iouv_afam = torch.linspace(0.5, 0.95, 10, device=device)  # iou vector for mAP@0.5:0.95
     niou = iouv.numel()
 
     # Dataloader
@@ -263,12 +263,12 @@ def run(
     s = ('%20s' + '%11s' * 6) % ('Class', 'Images', 'Labels', 'P',
                                  'R', 'mAP@.5', 'mAP@.5:.95')
     s_afam = ('%20s' + '%11s' * 8) % ('Metrics', 'P', 'R', 'mAP@.5', 'mAP@.5:.95', 'mAP@.75', 'AP_s', 'AP_m', 'AP_l')
-    dt, p, r, f1, mp, mr, map50, map = [0.0, 0.0, 0.0], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-    mr_afam, mp_afam, map50_afam, map_afam = 0.0, 0.0, 0.0, 0.0  # AFA metrics no class
-    mr_cafam, mp_cafam, map50_cafam, map_cafam = 0.0, 0.0, 0.0, 0.0  # AFA metrics per class
+    dt, p, r, f1, mp, mr, map50, map, map75, maps, mapm, mapl = [0.0, 0.0, 0.0], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    mr_afam, mp_afam, map50_afam, map_afam, map_afam75, maps_afam, mapm_afam, mapl_afam = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0  # AFA metrics no class
+    mr_cafam, mp_cafam, map50_cafam, map_cafam, map75_cafam, maps_cafam, mapm_cafam, mapl_cafam = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0  # AFA metrics per class
     loss = torch.zeros(3, device=device)
-    jdict, stats, ap, ap_class, ap50 = [], [], [], [], []
-    afam_stats = []
+    jdict, stats_class, stats_size, ap, ap_class, ap50 = [], [], [], [], [], []
+    afam_stats_class, afam_stats_size = [], []
     callbacks.run('on_val_start')
     pbar = tqdm(dataloader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
@@ -310,7 +310,7 @@ def run(
 
             if npr == 0:
                 if nl:
-                    stats.append(
+                    stats_class.append(
                         (correct, *torch.zeros((5, 0), device=device)))
                 continue
 
@@ -318,10 +318,10 @@ def run(
             if single_cls:
                 pred[:, 5] = 0
             predn = pred.clone()
-            scale_coords(im[si].shape[1:], predn[:, :4], shape,
-                         shapes[si][1])  # native-space pred
+            scale_coords(im[si].shape[1:], predn[:, :4], shape, shapes[si][1])  # native-space pred
 
             # Evaluate
+            labels_size = torch.zeros(labels.shape[0])
             if nl:
                 tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
                 scale_coords(im[si].shape[1:], tbox, shape, shapes[si][1])  # native-space labels
@@ -329,21 +329,28 @@ def run(
                 labels = torch.cat((labels[:, 0:1], tbox), 1)
                 correct = process_batch(predn, labels, iouv)
 
+                labels_area = tools.boxes_area(labels[:, 1:5])
+                labels_size[labels_area > 32 ** 2] = 1
+                labels_size[labels_area > 96 ** 2] = 2
+
                 if plots:
                     confusion_matrix.process_batch(predn, labels)
 
             # Compute AFA metrics
-
+            pred_size = torch.zeros(predn.shape[0])
+            predn_area = tools.boxes_area(predn[:, :4])
+            pred_size[predn_area > 32**2] = 1
+            pred_size[predn_area > 96**2] = 2
             if compute_afam:
                 # TP for recall, FP=(1-TP) for precision, conf
-                correct_rec_afam, correct_prec_afam, conf, pred_class = process_batch_afam(predn, labels, iouv_afam,
+                correct_rec_afam, correct_prec_afam, conf, pred_class = process_batch_afam(predn, labels, iouv,
                                                                                            final_epoch)
-                afam_stats.append((correct_rec_afam, correct_prec_afam, conf, pred_class, labels[:, 0]))
-
+                afam_stats_class.append((correct_rec_afam, correct_prec_afam, conf, pred_class, labels[:, 0]))
+                afam_stats_size.append((correct_rec_afam, correct_prec_afam, conf, pred_size, labels_size))
             # (correct, conf, pcls, tcls)
 
-            stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))
-
+            stats_class.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))
+            stats_size.append((correct, correct, pred[:, 4], pred_size, labels_size))
             # Save/log
             if save_txt:
                 save_one_txt(predn, save_conf, shape, file=save_dir / 'labels' / (path.stem + '.txt'))
@@ -363,44 +370,51 @@ def run(
 
     # Compute metrics
 
-    stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
-    afam_stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*afam_stats)] if compute_afam else []  # to numpy
+    stats_class = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats_class)]  # to numpy
+    afam_stats_class = [torch.cat(x, 0).cpu().numpy() for x in zip(*afam_stats_class)] if compute_afam else []  # to numpy
+    stats_size = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats_size)]  # to numpy
+    afam_stats_size = [torch.cat(x, 0).cpu().numpy() for x in zip(*afam_stats_size)] if compute_afam else []  # to numpy
 
-    if len(stats) and stats[0].any():
-        tp, fp, p, r, f1, ap, ap_class, py = ap_per_class(*stats, plot=plots, save_dir=save_dir, names=names)
+    if len(stats_class) and stats_class[0].any():
+        tp, fp, p, r, f1, ap, ap_class, py = ap_per_class(*stats_class, plot=plots, save_dir=save_dir, names=names)
+        ap_size = ap_per_size(*stats_size, plot=plots, save_dir=save_dir)
         if compute_afam:
             cafap, cafar, cafam_f1, ap_cafam, afap, afar, afam_f1, ap_afam, px, py_cafam, py_afam = \
-                afam_per_class(*afam_stats, compute_noclass=True, plot=plots, save_dir=save_dir, names=names)
+                afam_per_class(*afam_stats_class, compute_noclass=True, plot=plots, save_dir=save_dir, names=names)
+            ap_afam_size = ap_per_size(*afam_stats_size, plot=plots, save_dir=save_dir)
             if plots:
                 plot_pr_comparison(px, np.array([py, py_cafam, py_afam]), Path(save_dir) / 'PR_curves.png')
 
-            ap50_cafam, ap_cafam = ap_cafam[:, 0], ap_cafam.mean(1)  # AP@0.5, AP@0.5:0.95
-            ap50_afam, ap_afam = ap_afam[:, 0], ap_afam.mean(1)  # AP@0.5, AP@0.5:0.95
-            mp_cafam, mr_cafam, map50_cafam, map_cafam, = cafap.mean(), cafar.mean(), ap50_cafam.mean(), ap_cafam.mean()
-            mp_afam, mr_afam, map50_afam, map_afam, = afap.mean(), afar.mean(), ap50_afam.mean(), ap_afam.mean()
+            ap50_cafam, ap75_cafam, ap_cafam = ap_cafam[:, 0], ap_cafam[:, 5], ap_cafam.mean(1)  # AP@0.5, AP@0.5:0.95
+            ap50_afam, ap75_afam, ap_afam = ap_afam[:, 0], ap_afam[:, 5], ap_afam.mean(1)  # AP@0.5, AP@0.5:0.95
+            mp_cafam, mr_cafam, map50_cafam, map_cafam, map75_cafam = cafap.mean(), cafar.mean(), ap50_cafam.mean(), ap_cafam.mean(), ap75_cafam.mean()
+            mp_afam, mr_afam, map50_afam, map_afam, map75_afam = afap.mean(), afar.mean(), ap50_afam.mean(), ap_afam.mean(), ap75_afam
 
-        ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
+        ap50, ap75,  ap = ap[:, 0], ap[:, 5], ap.mean(1)  # AP@0.5, AP@0.5:0.95
         mp, mr, map50, map, = p.mean(), r.mean(), ap50.mean(), ap.mean()
 
         # number of targets per class
-        nt = np.bincount(stats[3].astype(int), minlength=nc)
+        nt = np.bincount(stats_class[3].astype(int), minlength=nc)
     else:
         nt = torch.zeros(1)
 
     # Print results
     if compute_afam:
         pf = '%20s' + '%11.3g' * 8  # print format
-        LOGGER.info(pf % ('all', seen, nt.sum(), mp, mr, map50, map))
+        LOGGER.info(('%20s' + '%11.3g' * 6) % ('all', seen, nt.sum(), mp, mr, map50, map))
         LOGGER.info(s_afam)
-        LOGGER.info(pf % ('AFAM_class', mp_cafam, mr_cafam, map50_cafam, map_cafam))
+        LOGGER.info(pf % ('Coco', mp, mr, map50, map75, map, ap_size[:, 0].mean(), ap_size[:, 1].mean(), ap_size[:, 2].mean()))
         LOGGER.info(s_afam)
-        LOGGER.info(pf % ('AFAM_noClass', mp_afam, mr_afam, map50_afam, map_afam))
+        LOGGER.info(pf % ('AFAM_class', mp_cafam, mr_cafam, map50_cafam, map75_cafam, map_cafam,
+                          ap_afam_size[:, 0].mean(), ap_afam_size[:, 1].mean(), ap_afam_size[:, 2].mean()))
+        LOGGER.info(('%20s' + '%11s' * 5) % ('Metrics', 'P', 'R', 'mAP@.5', 'mAP@.5:.95', 'mAP@.75'))
+        LOGGER.info(('%20s' + '%11.3g' * 5) % ('AFAM_noClass', mp_afam, mr_afam, map50_afam, map75_afam, map_afam))
     else:
         pf = '%20s' + '%11i' * 2 + '%11.3g' * 4  # print format
         LOGGER.info(pf % ('all', seen, nt.sum(), mp, mr, map50, map))
 
     # Print results per class
-    if (verbose or (nc < 50 and not training)) and nc > 1 and len(stats):
+    if (verbose or (nc < 50 and not training)) and nc > 1 and len(stats_class):
         for i, c in enumerate(ap_class):
             pf = '%20s' + '%11i' * 2 + '%11.3g' * 4  # print format
             LOGGER.info(pf % (names[c], seen, nt[c], p[i], r[i], ap50[i], ap[i]))
@@ -482,7 +496,7 @@ def parse_opt():
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
-    parser.add_argument('--final-epoch', type=int, default=1, help='Accurate or fast validation')
+    parser.add_argument('--final-epoch', action='store_true', help='Accurate or fast validation')
 
     opt = parser.parse_args()
     opt.data = check_yaml(opt.data)  # check YAML
