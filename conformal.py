@@ -161,7 +161,7 @@ def find_scales(gt, pred):
     ax1, ax2 = 2 * (gt[:, 2] - cx) / (pred[:, 2] - pred[:, 0]), 2 * (cx - gt[:, 0]) / (pred[:, 2] - pred[:, 0])
     ay1, ay2 = 2 * (gt[:, 3] - cy) / (pred[:, 3] - pred[:, 1]), 2 * (cy - gt[:, 1]) / (pred[:, 3] - pred[:, 1])
 
-    amx, amy = np.minimum(ax1, ax2), torch.minimum(ay1, ay2)
+    amx, amy = torch.minimum(ax1, ax2), torch.minimum(ay1, ay2)
     aMx, aMy = torch.maximum(ax1, ax2), torch.maximum(ay1, ay2)
 
     return amx, amy, aMx, aMy
