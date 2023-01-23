@@ -524,7 +524,7 @@ def run(
     plt.figure()
     plt.imshow(cover)
     plt.show()
-    print(qalpha.transpose(0,2), cover.t())
+    print(qalpha.transpose(0,2), np.transpose(cover))
 
     return scale, cover
 
