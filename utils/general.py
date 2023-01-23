@@ -875,7 +875,7 @@ def non_max_suppression(prediction,
 
         #confidence.append((gt_iou.max(1)[0],x[:,4], iou.mean(1),matches))
         if 0:
-            matplotlib.use('TkAgg')
+
             plt.figure(3)
             plt.plot(gt_iou.max(1)[0].sort()[0])
             plt.plot(smooth(np.array(x[gt_iou.max(1)[0].sort()[1], 4])))

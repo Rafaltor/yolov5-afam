@@ -394,7 +394,7 @@ def run(
     conf = torch.cat(conf).numpy()
 
     import matplotlib
-    matplotlib.use('TkAgg')
+
 
     qmx = torch.ones(n_conf, n_class)
     qMx = torch.ones(n_conf, n_class)
