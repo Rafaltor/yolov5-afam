@@ -34,7 +34,7 @@ import torch
 import torchvision
 import yaml
 import matplotlib
-matplotlib.use('TkAgg')
+
 
 from utils.downloads import gsutil_getsize
 from utils.metrics import box_iou, fitness, smooth, ap_per_class
@@ -859,10 +859,11 @@ def non_max_suppression(prediction,
             continue
 
 
-        gt_box = xywh2xyxy(gt[:, 1:])
+
         box = xywh2xyxy(x[:, :4])
 
-
+        '''
+        gt_box = xywh2xyxy(gt[:, 1:])
         gt_box = torch.cat((gt_box, gt[:, 0:1]), 1)
         boxes = torch.cat((box, x[:, 5:].max(1, keepdims=True)[1], x[:, 5:].max(1, keepdims=True)[0]), 1)
         gt_iou = gt_box_iou(boxes, gt_box)
@@ -883,14 +884,12 @@ def non_max_suppression(prediction,
             plt.plot(smooth(np.array(matches[gt_iou.max(1)[0].sort()[1]])))
             plt.plot(smooth(np.array(1-x[gt_iou.max(1)[0].sort()[1], 5:].sort(1, descending = True)[0][:, 1])))
             plt.legend(["Gt IoU", "Pred IoU 15", "Objectness", "Matches IoU", "Pred  IoP 15", "multi"])
-            plt.show()
+            plt.show()'''
 
 
 
-        if 0:
-            x[:, 5:] *= matches[:, None]  # conf = obj_conf * cls_conf
-        else:
-            x[:, 5:] *= x[:, 4:5]
+
+        x[:, 5:] *= x[:, 4:5]
         # Detections matrix nx6 (xyxy, conf, cls)
         if multi_label:
             i, j = (x[:, 5:] > conf_thres).nonzero(as_tuple=False).T
