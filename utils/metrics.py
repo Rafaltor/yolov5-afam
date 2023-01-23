@@ -191,15 +191,12 @@ def cover_per_conf(conf, classes, tp_cover, n_conf, n_class):
     i = np.argsort(-conf)
     tp_cover, classes, conf = tp_cover[i], classes[i], conf[i]
 
-    cover, count = torch.zeros(n_conf, n_class), torch.zeros(n_conf, n_class)
+    cover, count = np.zeros([n_conf, n_class]), np.zeros([n_conf, n_class])
 
-    for i in range(len(tp_cover)):
-        count[conf[i], classes[i]] += 1
-        cover[conf[i], classes[i]] += tp_cover[i]
-
-
-
-
+    for i in range(n_conf):
+        for j in range(n_class):
+            count[i, j] += np.multiply(conf == i, classes == j).sum()
+            cover[i, j] += tp_cover[np.multiply(conf == i, classes == j)].sum()
 
     return cover / count
 

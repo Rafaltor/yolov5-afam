@@ -524,9 +524,9 @@ def run(
     plt.figure()
     plt.imshow(cover)
     plt.show()
-    print(cover)
+    print(qalpha.transpose(0,2), cover.t())
 
-    return cover
+    return scale, cover
 
 
 def parse_opt():
