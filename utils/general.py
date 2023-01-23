@@ -26,15 +26,19 @@ from typing import Optional
 from zipfile import ZipFile
 
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pkg_resources as pkg
 import torch
 import torchvision
 import yaml
+import matplotlib
+matplotlib.use('TkAgg')
 
 from utils.downloads import gsutil_getsize
-from utils.metrics import box_iou, fitness
+from utils.metrics import box_iou, fitness, smooth, ap_per_class
+from utils.tools import boxes_iou, gt_box_iou, clustering
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]  # YOLOv5 root directory
@@ -771,6 +775,33 @@ def clip_coords(boxes, shape):
         boxes[:, [0, 2]] = boxes[:, [0, 2]].clip(0, shape[1])  # x1, x2
         boxes[:, [1, 3]] = boxes[:, [1, 3]].clip(0, shape[0])  # y1, y2
 
+def process_batch(detections, labels, iouv):
+    """
+    Return correct predictions matrix. Both sets of boxes are in (x1, y1, x2, y2) format.
+    Arguments:
+        detections (Array[N, 6]), x1, y1, x2, y2, conf, class
+        labels (Array[M, 5]), class, x1, y1, x2, y2
+        iouv (Array[10,1]), iou thresholds
+    Returns:
+        correct (Array[N, 10]), for 10 IoU levels
+    """
+    correct = torch.zeros(detections.shape[0], iouv.shape[0], dtype=torch.bool, device=iouv.device)
+    iou = box_iou(labels[:, 1:], detections[:, :4])
+    correct_class = labels[:, 0:1] == detections[:, 5]
+
+    for i in range(len(iouv)):
+        # IoU > threshold and classes match
+        x = torch.where((iou >= iouv[i]) & correct_class)
+        if x[0].shape[0]:
+            matches = torch.cat((torch.stack(x, 1), iou[x[0], x[1]][:, None]), 1).cpu().numpy()  # [label, detect, iou]
+            if x[0].shape[0] > 1:
+                matches = matches[matches[:, 2].argsort()[::-1]]
+                matches = matches[np.unique(matches[:, 1], return_index=True)[1]]
+                # matches = matches[matches[:, 2].argsort()[::-1]]
+                matches = matches[np.unique(matches[:, 0], return_index=True)[1]]
+            correct[matches[:, 1].astype(int), i] = True
+
+    return correct
 
 def non_max_suppression(prediction,
                         conf_thres=0.25,
@@ -779,7 +810,8 @@ def non_max_suppression(prediction,
                         agnostic=False,
                         multi_label=False,
                         labels=(),
-                        max_det=300):
+                        max_det=300,
+                        targets = []):
     """Non-Maximum Suppression (NMS) on inference results to reject overlapping bounding boxes
 
     Returns:
@@ -798,17 +830,20 @@ def non_max_suppression(prediction,
     # min_wh = 2  # (pixels) minimum box width and height
     max_wh = 7680  # (pixels) maximum box width and height
     max_nms = 30000  # maximum number of boxes into torchvision.ops.nms()
-    time_limit = 0.3 + 0.03 * bs  # seconds to quit after
+    time_limit = 0.3 + 0.3 * bs  # seconds to quit after
     redundant = True  # require redundant detections
     multi_label &= nc > 1  # multiple labels per box (adds 0.5ms/img)
     merge = False  # use merge-NMS
-
+    confidence = []
+    ideal_iou = []
     t = time.time()
+    stats = []
     output = [torch.zeros((0, 6), device=prediction.device)] * bs
     for xi, x in enumerate(prediction):  # image index, image inference
         # Apply constraints
         # x[((x[..., 2:4] < min_wh) | (x[..., 2:4] > max_wh)).any(1), 4] = 0  # width-height
         x = x[xc[xi]]  # confidence
+        gt = targets[targets[:, 0] == xi, 1:]
 
         # Cat apriori labels if autolabelling
         if labels and len(labels[xi]):
@@ -823,23 +858,55 @@ def non_max_suppression(prediction,
         if not x.shape[0]:
             continue
 
-        # Compute conf
-        x[:, 5:] *= x[:, 4:5]  # conf = obj_conf * cls_conf
 
-        # Box (center x, center y, width, height) to (x1, y1, x2, y2)
+        gt_box = xywh2xyxy(gt[:, 1:])
         box = xywh2xyxy(x[:, :4])
 
+
+        gt_box = torch.cat((gt_box, gt[:, 0:1]), 1)
+        boxes = torch.cat((box, x[:, 5:].max(1, keepdims=True)[1], x[:, 5:].max(1, keepdims=True)[0]), 1)
+        gt_iou = gt_box_iou(boxes, gt_box)
+        iou, iog, iop = boxes_iou(boxes)
+
+
+        matches = ((iog+iop+iou)/3 > 0.5).sum(1)
+        matches = matches / matches.max()
+        multi = x[:, 5:].sort(1, descending = True)[0][:, :].mean(1)
+
+        #confidence.append((gt_iou.max(1)[0],x[:,4], iou.mean(1),matches))
+        if 0:
+            matplotlib.use('TkAgg')
+            plt.figure(3)
+            plt.plot(gt_iou.max(1)[0].sort()[0])
+            plt.plot(smooth(np.array(x[gt_iou.max(1)[0].sort()[1], 4])))
+            #plt.plot(smooth(np.array(multi[gt_iou.max(1)[0].sort()[1]])))
+            plt.plot(smooth(np.array(matches[gt_iou.max(1)[0].sort()[1]])))
+            plt.plot(smooth(np.array(1-x[gt_iou.max(1)[0].sort()[1], 5:].sort(1, descending = True)[0][:, 1])))
+            plt.legend(["Gt IoU", "Pred IoU 15", "Objectness", "Matches IoU", "Pred  IoP 15", "multi"])
+            plt.show()
+
+
+
+        if 0:
+            x[:, 5:] *= matches[:, None]  # conf = obj_conf * cls_conf
+        else:
+            x[:, 5:] *= x[:, 4:5]
         # Detections matrix nx6 (xyxy, conf, cls)
         if multi_label:
             i, j = (x[:, 5:] > conf_thres).nonzero(as_tuple=False).T
-            x = torch.cat((box[i], x[i, j + 5, None], j[:, None].float()), 1)
+            x = torch.cat((box[i], x[i, j+5, None], j[:, None].float()), 1)
+
         else:  # best class only
             conf, j = x[:, 5:].max(1, keepdim=True)
             x = torch.cat((box, conf, j.float()), 1)[conf.view(-1) > conf_thres]
 
+
+
+
         # Filter by class
         if classes is not None:
             x = x[(x[:, 5:6] == torch.tensor(classes, device=x.device)).any(1)]
+
 
         # Apply finite constraint
         # if not torch.isfinite(x).all():
@@ -856,6 +923,7 @@ def non_max_suppression(prediction,
         c = x[:, 5:6] * (0 if agnostic else max_wh)  # classes
         boxes, scores = x[:, :4] + c, x[:, 4]  # boxes (offset by class), scores
         i = torchvision.ops.nms(boxes, scores, iou_thres)  # NMS
+
         if i.shape[0] > max_det:  # limit detections
             i = i[:max_det]
         if merge and (1 < n < 3E3):  # Merge NMS (boxes merged using weighted mean)
@@ -866,10 +934,21 @@ def non_max_suppression(prediction,
             if redundant:
                 i = i[iou.sum(1) > 1]  # require redundancy
 
+
+
         output[xi] = x[i]
-        if (time.time() - t) > time_limit:
-            LOGGER.warning(f'WARNING: NMS time limit {time_limit:.3f}s exceeded')
-            break  # time limit exceeded
+        #if (time.time() - t) > time_limit:
+            #LOGGER.warning(f'WARNING: NMS time limit {time_limit:.3f}s exceeded')
+            #break  # time limit exceeded
+    if 0:
+        confidence = [torch.cat(x, 0).cpu().numpy() for x in zip(*confidence)]  # to numpy
+        i = np.argsort(-confidence[0])
+        plt.figure(3)
+        plt.plot(confidence[0][i])
+        plt.plot(smooth(np.array(confidence[1][i]),0.005))
+        plt.plot(smooth(np.array(confidence[2][i]),0.005))
+        plt.plot(smooth(np.array(confidence[3][i]),0.005))
+        plt.show()
 
     return output
 

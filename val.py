@@ -20,6 +20,7 @@ Usage - formats:
                                       yolov5s_edgetpu.tflite     # TensorFlow Edge TPU
 """
 
+import os
 from utils.torch_utils import select_device, time_sync
 from utils.plots import output_to_target, plot_images, plot_val_study
 from utils.metrics import ConfusionMatrix, ap_per_class, ap_per_size, box_iou, afam_per_class, plot_pr_comparison
@@ -29,16 +30,19 @@ from utils.general import (LOGGER, check_dataset, check_img_size, check_requirem
 from utils.dataloaders import create_dataloader
 from utils.callbacks import Callbacks
 from models.common import DetectMultiBackend
+
 import argparse
 import json
 import sys
 from pathlib import Path
-import tools
+from utils.tools import box_area, get_intersection_from_list, get_union_from_list, get_intersection_between_list, \
+    boxes_area
 import numpy as np
 import torch
 from tqdm import tqdm
-from time import time
-import os
+from scipy.optimize import minimize_scalar
+import matplotlib.pyplot as plt
+
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
@@ -133,20 +137,20 @@ def process_batch_afam(detections, labels, ioav, accurate_metrics):
 
     for i, label in enumerate(labels[:, 1:5]):
         indexes = torch.where(correct_class[i])
-        label_area = tools.box_area(label)
+        label_area = box_area(label)
         union_preds_labels = labels[:i, 1:][labels[:i, 0] == labels[i, 0]]
 
         for j, pred in enumerate(detections[correct_class[i]]):
-            intersection_pred_label = tools.get_intersection_from_list([pred], label)
+            intersection_pred_label = get_intersection_from_list([pred], label)
             if intersection_pred_label and (iogs[correct_class[i], i].sum()) < 0.99 * label_area:
 
-                iogs[indexes[0][j], i] = tools.box_area(intersection_pred_label[0]) - tools.get_union_from_list(
-                    tools.get_intersection_between_list(union_preds_labels, intersection_pred_label))
+                iogs[indexes[0][j], i] = box_area(intersection_pred_label[0]) - get_union_from_list(
+                    get_intersection_between_list(union_preds_labels, intersection_pred_label))
                 if iogs[indexes[0][j], i] > 10:
                     union_preds_labels = torch.cat((union_preds_labels, intersection_pred_label[0].reshape(1, 4)))
 
-    iops = torch.t(torch.t(iogs) / tools.boxes_area(detections[:, :4]))
-    iogs = iogs / tools.boxes_area(labels[:, 1:])
+    iops = torch.t(torch.t(iogs) / boxes_area(detections[:, :4]))
+    iogs = iogs / boxes_area(labels[:, 1:])
 
     tp_precision = iops.sum(1).reshape(-1, 1) > ioav.expand(len(detections), len(ioav))
     tp_recall = torch.diff((torch.transpose(iogs.cumsum(0).expand(len(ioav), len(detections), len(labels)), 0, 2) >
@@ -154,6 +158,59 @@ def process_batch_afam(detections, labels, ioav, accurate_metrics):
                            prepend=torch.zeros(1, len(ioav), device=labels.device))
 
     return tp_recall, tp_precision, conf, detections[:, 5]
+
+
+
+def expand_box(pred, lam):
+    box = torch.clone(pred)
+    print(box)
+    ratioX = (box[2] - box[0]) * lam / 2
+    ratioY = (box[3] - box[1]) * lam / 2
+    box[0] -= ratioX
+    box[1] -= ratioY
+    box[2] += ratioX
+    box[3] += ratioY
+    return box
+
+
+def iou_threshold(lam, pred, label):
+    return 1 - box_iou(expand_box(pred, lam).expand(1, 4), label[1:].expand(1, 4))
+
+
+def process_score(detections, labels, iou_thres):
+    """
+        Return the score for each label according to the conformal learning theory.
+        Both sets of boxes are in (x1, y1, x2, y2) format.
+        Arguments:
+            detections (Array[N, 6]), x1, y1, x2, y2, conf, class
+            labels (Array[M, 5]), class, x1, y1, x2, y2
+            iou_thres (float) iou threshold for the score
+        Returns:
+            scores (Array[M, 1]), Scores for each label
+        """
+    conf = detections[:, 4]
+    order = np.argsort(-conf.cpu())
+    conf, detections = conf[order], detections[order]
+
+    scores = torch.zeros(labels.shape[0], 1, device=labels.device)  # Scores init
+
+    iou = box_iou(labels[:, 1:], detections[:, :4])
+    correct_class = labels[:, 0:1] == detections[:, 5]
+
+    iou = iou*correct_class
+    ind = ((iou > iou_thres) * iou).max(1)[1][((iou > iou_thres)*iou).max(1)[0] != 0]
+
+    return conf[ind]
+
+    #for l, label in enumerate(labels):
+    #    pred = torch.clone(detections[iou.max(1)[1][l]][:4])
+    #
+    #    min = minimize_scalar(iou_threshold, bracket=(-1,1), args=(pred,label))
+
+
+
+
+
 
 
 @torch.no_grad()
@@ -266,9 +323,10 @@ def run(
     dt, p, r, f1, mp, mr, map50, map, map75, maps, mapm, mapl = [0.0, 0.0, 0.0], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     mr_afam, mp_afam, map50_afam, map_afam, map_afam75, maps_afam, mapm_afam, mapl_afam = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0  # AFA metrics no class
     mr_cafam, mp_cafam, map50_cafam, map_cafam, map75_cafam, maps_cafam, mapm_cafam, mapl_cafam = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0  # AFA metrics per class
+    ap_size = 0
     loss = torch.zeros(3, device=device)
     jdict, stats_class, stats_size, ap, ap_class, ap50 = [], [], [], [], [], []
-    afam_stats_class, afam_stats_size = [], []
+    afam_stats_class, afam_stats_size, conformal = [], [], []
     callbacks.run('on_val_start')
     pbar = tqdm(dataloader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
@@ -287,6 +345,9 @@ def run(
         out, train_out = model(im) if training else model(im, augment=augment, val=True)  # inference, loss outputs
         dt[1] += time_sync() - t2
 
+        torch.save(out, Path('prediction.pt'))
+        torch.save(targets, Path('targets.pt'))
+        torch.save(im, Path('im.pt'))
         # Loss
         if compute_loss:
             loss += compute_loss([x.float() for x in train_out], targets)[1]  # box, obj, cls
@@ -296,7 +357,7 @@ def run(
         targets[:, 2:] *= torch.tensor((width, height, width, height), device=device)
         lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
         t3 = time_sync()
-        out = non_max_suppression(out, conf_thres, iou_thres, labels=lb, multi_label=True, agnostic=single_cls)
+        out = non_max_suppression(out, conf_thres, iou_thres, labels=lb, multi_label=True, agnostic=single_cls, targets = targets)
         dt[2] += time_sync() - t3
 
         # Metrics
@@ -329,7 +390,7 @@ def run(
                 labels = torch.cat((labels[:, 0:1], tbox), 1)
                 correct = process_batch(predn, labels, iouv)
 
-                labels_area = tools.boxes_area(labels[:, 1:5])
+                labels_area = boxes_area(labels[:, 1:5])
                 labels_size[labels_area > 32 ** 2] = 1
                 labels_size[labels_area > 96 ** 2] = 2
 
@@ -338,9 +399,11 @@ def run(
 
             # Compute AFA metrics
             pred_size = torch.zeros(predn.shape[0])
-            predn_area = tools.boxes_area(predn[:, :4])
+            predn_area = boxes_area(predn[:, :4])
             pred_size[predn_area > 32**2] = 1
             pred_size[predn_area > 96**2] = 2
+            conf = process_score(predn, labels, 0.9)
+            conformal.append((conf))
             if compute_afam:
                 # TP for recall, FP=(1-TP) for precision, conf
                 correct_rec_afam, correct_prec_afam, conf, pred_class = process_batch_afam(predn, labels, iouv,
@@ -373,7 +436,13 @@ def run(
     afam_stats_class = [torch.cat(x, 0).cpu().numpy() for x in zip(*afam_stats_class)] if compute_afam else []  # to numpy
     stats_size = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats_size)]  # to numpy
     afam_stats_size = [torch.cat(x, 0).cpu().numpy() for x in zip(*afam_stats_size)] if compute_afam else []  # to numpy
-
+    conformal = torch.cat(conformal).numpy()
+    import matplotlib
+    matplotlib.use('TkAgg')
+    plt.figure()
+    counts, bins = np.histogram(conformal)
+    plt.stairs(counts, bins)
+    plt.show()
     if len(stats_class) and stats_class[0].any():
         tp, fp, p, r, f1, ap, ap_class, py = ap_per_class(*stats_class, plot=plots, save_dir=save_dir, names=names)
         ap_size = ap_per_size(*stats_size, plot=plots, save_dir=save_dir)

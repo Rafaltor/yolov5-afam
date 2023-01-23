@@ -13,6 +13,8 @@ import sys
 from copy import deepcopy
 from pathlib import Path
 
+import torch
+
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]  # YOLOv5 root directory
 if str(ROOT) not in sys.path:
@@ -336,3 +338,5 @@ if __name__ == '__main__':
 
     else:  # report fused model summary
         model.fuse()
+    y = model(im)
+    print(y[0].shape)

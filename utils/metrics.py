@@ -80,7 +80,7 @@ def ap_per_class(tp, conf, pred_cls, target_cls, plot=False, save_dir='.', names
         # AP from recall-precision curve
         for j in range(tp.shape[1]):
             ap[ci, j], mpre, mrec = compute_ap(recall[:, j], precision[:, j])
-            if plot and j == 0:
+            if j == 0:
                 py.append(np.interp(px, mrec, mpre))  # precision at mAP@0.5
 
     # Computes the custom metrics to achieve a satisfying tradeoff between
@@ -171,6 +171,38 @@ def ap_per_size(tp_recall, tp_precision, conf, pred_size_cls, target_size_cls, p
         plot_mc_curve(px, r, Path(save_dir) / 'R_curve_size.png', y_label='Recall')
 
     return ap
+
+def cover_per_conf(conf, classes, tp_cover, n_conf, n_class):
+    """ Compute the average precision, given the recall and precision curves.
+    Source: https://github.com/rafaelpadilla/Object-Detection-Metrics.
+    # Arguments
+        tp:  True positives (nparray, nx1 or nx10).
+        conf:  Confidence value from 0-1 (nparray).
+        pred_cls:  Predicted object classes (nparray).
+        target_cls:  True object classes (nparray).
+        size_cls: categorie for the size of the box (nparray).
+        plot:  Plot precision-recall curve at mAP@0.5
+        save_dir:  Plot save directory
+    # Returns
+        The average precision as computed in py-faster-rcnn.
+    """
+
+    # Sort by Confidence
+    i = np.argsort(-conf)
+    tp_cover, classes, conf = tp_cover[i], classes[i], conf[i]
+
+    cover, count = torch.zeros(n_conf, n_class), torch.zeros(n_conf, n_class)
+
+    for i in range(len(tp_cover)):
+        count[conf[i], classes[i]] += 1
+        cover[conf[i], classes[i]] += tp_cover[i]
+
+
+
+
+
+    return cover / count
+
 
 def afam_per_class(tp_recall, tp_precision, conf, pred_cls, target_cls,
                    compute_noclass=False, plot=False, save_dir='.', names=(), eps=1e-16):
