@@ -521,7 +521,7 @@ def run(
     plt.figure()
     plt.imshow(cover)
     plt.show()
-    print(qalpha.transpose(0, 2)[:, :-1, :], np.transpose(cover))
+    
 
     return qalpha.transpose(0, 2)[:, :-1, :], np.transpose(cover)
 
