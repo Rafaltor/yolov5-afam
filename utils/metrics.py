@@ -193,12 +193,12 @@ def cover_per_conf(conf, classes, tp_cover, n_conf, n_class):
 
     cover, count = np.zeros([n_conf, n_class]), np.zeros([n_conf, n_class])
 
-    for i in range(n_conf):
+    for i in range(n_conf-1):
         for j in range(n_class):
             count[i, j] += np.multiply(conf == i, classes == j).sum()
             cover[i, j] += tp_cover[np.multiply(conf == i, classes == j)].sum()
 
-    return cover / count
+    return cover[:-1, :] / count[:-1, :]
 
 
 def afam_per_class(tp_recall, tp_precision, conf, pred_cls, target_cls,

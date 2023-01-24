@@ -33,7 +33,6 @@ from models.common import DetectMultiBackend
 
 import argparse
 import json
-import time
 import sys
 from pathlib import Path
 from utils.tools import boxes_iou, get_intersection_from_list, get_union_from_list, get_intersection_between_list
@@ -313,7 +312,6 @@ def run(
         rect = False if task == 'benchmark' else pt  # square inference for benchmarks
         # path to train/val/test images
         task = task if task in ('train', 'val', 'test') else 'val'
-        t1 = time.time()
         cal, val = create_dataloader(data[task],
                                      imgsz,
                                      batch_size,
@@ -325,7 +323,6 @@ def run(
                                      prefix=colorstr(f'{task}: '),
                                      split=split)
 
-    print(time.time() - t1)
 
     seen = 0
     names = {k: v for k, v in enumerate(
@@ -524,9 +521,9 @@ def run(
     plt.figure()
     plt.imshow(cover)
     plt.show()
-    print(qalpha.transpose(0,2), np.transpose(cover))
+    print(qalpha.transpose(0, 2)[:, :-1, :], np.transpose(cover))
 
-    return scale, cover
+    return qalpha.transpose(0, 2)[:, :-1, :], np.transpose(cover)
 
 
 def parse_opt():
