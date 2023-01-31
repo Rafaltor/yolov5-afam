@@ -21,8 +21,11 @@ Usage - formats:
 """
 
 import os
-from utils.torch_utils import select_device, time_sync
-from utils.plots import output_to_target, plot_images, plot_val_study
+
+import matplotlib
+
+from utils.torch_utils import select_device
+from utils.plots import output_to_target, plot_images, plot_val_study, plot_box
 from utils.metrics import ConfusionMatrix, cover_per_conf, box_iou, afam_per_class, plot_pr_comparison, box_ioa
 from utils.general import (LOGGER, check_dataset, check_img_size, check_requirements, check_yaml,
                            coco80_to_coco91_class, colorstr, emojis, increment_path, non_max_suppression, print_args,
@@ -32,14 +35,12 @@ from utils.callbacks import Callbacks
 from models.common import DetectMultiBackend
 
 import argparse
-import json
 import sys
 from pathlib import Path
-from utils.tools import boxes_iou, get_intersection_from_list, get_union_from_list, get_intersection_between_list
+from utils.tools import boxes_area, get_intersection_from_list, get_union_from_list, get_intersection_between_list
 import numpy as np
 import torch
 from tqdm import tqdm
-from scipy.optimize import minimize_scalar
 import matplotlib.pyplot as plt
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -72,35 +73,6 @@ def save_one_json(predn, jdict, path, class_map):
             'category_id': class_map[int(p[5])],
             'bbox': [round(x, 3) for x in b],
             'score': round(p[4], 5)})
-
-
-def process_batch(detections, labels, iouv):
-    """
-    Return correct predictions matrix. Both sets of boxes are in (x1, y1, x2, y2) format.
-    Arguments:
-        detections (Array[N, 6]), x1, y1, x2, y2, conf, class
-        labels (Array[M, 5]), class, x1, y1, x2, y2
-        iouv (Array[10,1]), iou thresholds
-    Returns:
-        correct (Array[N, 10]), for 10 IoU levels
-    """
-    correct = torch.zeros(detections.shape[0], iouv.shape[0], dtype=torch.bool, device=iouv.device)
-    iou = box_iou(labels[:, 1:], detections[:, :4])
-    correct_class = labels[:, 0:1] == detections[:, 5]
-
-    for i in range(len(iouv)):
-        # IoU > threshold and classes match
-        x = torch.where((iou >= iouv[i]) & correct_class)
-        if x[0].shape[0]:
-            matches = torch.cat((torch.stack(x, 1), iou[x[0], x[1]][:, None]), 1).cpu().numpy()  # [label, detect, iou]
-            if x[0].shape[0] > 1:
-                matches = matches[matches[:, 2].argsort()[::-1]]
-                matches = matches[np.unique(matches[:, 1], return_index=True)[1]]
-                # matches = matches[matches[:, 2].argsort()[::-1]]
-                matches = matches[np.unique(matches[:, 0], return_index=True)[1]]
-            correct[matches[:, 1].astype(int), i] = True
-
-    return correct
 
 
 def scale_boxes(pred, ax, ay):
@@ -166,7 +138,7 @@ def find_scales(gt, pred):
     return scale
 
 
-def process_score(detections, labels, iou_thres, n_conf, n_class, nc):
+def process_score(detections, labels, iou_thres, n_conf, n_size):
     """
         Return the score for each label according to the conformal learning theory.
         Both sets of boxes are in (x1, y1, x2, y2) format.
@@ -193,20 +165,19 @@ def process_score(detections, labels, iou_thres, n_conf, n_class, nc):
 
     scale = find_scales(labels_matched, detection_matched)
 
-    # pred_area = boxes_area(detection_matched[:, :4])
-    # size_int = torch.linspace(0, 200, n_size)
-    # pred_size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1
+    # classes = detections[ind[:, 1], 5]
+    # class_int = torch.linspace(0, n_class, n_class, device=classes.device)
+    # pred_class = (classes*n_class/nc >= torch.t(class_int.expand(1, n_class))).sum(0) - 1
 
-    classes = detections[ind[:, 1], 5]
-    class_int = torch.linspace(0, n_class, n_class, device=classes.device)
-    pred_class = (classes*n_class/nc >= torch.t(class_int.expand(1, n_class))).sum(0) - 1
+    pred_area = boxes_area(detection_matched[:, :4])
+    size_int = torch.linspace(0, 96, n_size)
+    pred_size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1
 
     conf = detections[ind[:, 1], 4]
     conf_int = torch.linspace(0, 1, n_conf, device=conf.device)
     pred_conf = (conf >= torch.t(conf_int.expand(1, n_conf))).sum(0) - 1
 
-    return scale, pred_class, pred_conf
-
+    return scale, pred_size, pred_conf
 
 
 def coverage(detections, labels, scale):
@@ -227,10 +198,11 @@ def coverage(detections, labels, scale):
     iog = box_ioa(bigB, labels[:, 1:])
     iou = box_iou(labels[:, 1:], detections[:, :4])
     if len(labels):
-        covered = (iop.t() + iog).max(1)[0] / 2 == 1
-        return covered
+        coveredm = (iop.t()).max(1)[0] == 1
+        coveredM = (iog).max(1)[0] == 1
+        return coveredm, coveredM, smallB, bigB
     else:
-        return torch.zeros(len(detections), device=labels.device)
+        return torch.zeros(len(detections), device=labels.device), torch.zeros(len(detections), device=labels.device), torch.zeros(0, 4), torch.zeros(0, 4)
 
 
 @torch.no_grad()
@@ -255,7 +227,7 @@ def run(
         risk=0.95,
         iou_conformal=0.5,
         n_conf=10,
-        n_class=1,
+        n_size=3,
         split=0.5
 
 ):
@@ -377,9 +349,9 @@ def run(
                 # native-space labels
                 labels = torch.cat((labels[:, 0:1], tbox), 1)
 
-            scale, classes, conf = process_score(predn, labels, iou_conformal, n_conf, n_class, nc)
+            scale, size, conf = process_score(predn, labels, iou_conformal, n_conf, n_size)
 
-            stats.append((scale, classes, conf))
+            stats.append((scale, size, conf))
 
 
             callbacks.run('on_val_image_end', pred, predn, path, names, im[si])
@@ -388,20 +360,20 @@ def run(
 
     # Compute metrics
 
-    scale, classes, conf = [torch.cat(x, 0).cpu() for x in zip(*stats)]  # to numpy
+    scale, size, conf = [torch.cat(x, 0).cpu() for x in zip(*stats)]  # to numpy
 
 
 
 
-    qalpha = torch.ones(4, n_conf, n_class, device=predn.device)
+    qalpha = torch.ones(4, n_conf, n_size, device=predn.device)
 
     for co in range(qalpha.shape[1]):
         for cl in range(qalpha.shape[2]):
-            if len(scale[torch.mul(conf == co, classes == cl), :]):
-                qalpha[0, co, cl] = np.quantile(scale[torch.mul(conf == co, classes == cl), 0], 1 - risk)
-                qalpha[1, co, cl] = np.quantile(scale[torch.mul(conf == co, classes == cl), 1], 1 - risk)
-                qalpha[2, co, cl] = np.quantile(scale[torch.mul(conf == co, classes == cl), 2], risk)
-                qalpha[3, co, cl] = np.quantile(scale[torch.mul(conf == co, classes == cl), 3], risk)
+            if len(scale[torch.mul(conf == co, size == cl), :]):
+                qalpha[0, co, cl] = np.quantile(scale[torch.mul(conf == co, size == cl), 0], 1 - risk)
+                qalpha[1, co, cl] = np.quantile(scale[torch.mul(conf == co, size == cl), 1], 1 - risk)
+                qalpha[2, co, cl] = np.quantile(scale[torch.mul(conf == co, size == cl), 2], risk)
+                qalpha[3, co, cl] = np.quantile(scale[torch.mul(conf == co, size == cl), 3], risk)
 
     #Plot relevants curves
     '''
@@ -501,6 +473,7 @@ def run(
             # Evaluate
             if nl:
                 tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
+                gt_box = torch.clone(tbox)
                 scale_coords(im[si].shape[1:], tbox, shape, shapes[si][1])  # native-space labels
                 # native-space labels
                 labels = torch.cat((labels[:, 0:1], tbox), 1)
@@ -508,20 +481,52 @@ def run(
             conf_int = torch.linspace(0, 1, n_conf, device=predn.device)
             conf = (predn[:, 4] >= torch.t(conf_int.expand(1, n_conf))).sum(0) - 1
 
-            class_int = torch.linspace(0, n_class, n_class, device=predn.device)
-            classes = (predn[:, 5].long() * n_class / nc >= torch.t(class_int.expand(1, n_class))).sum(0) - 1
+            pred_area = boxes_area(predn[:, :4])
+            size_int = torch.linspace(0, 96, n_size)
+            size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1
 
-            scale = qalpha[:, conf, classes]
-            covered = coverage(predn, labels, scale)
-            stats.append((conf, classes, covered))
+            scale = qalpha[:, conf, size]
+            coveredm, coveredM, smallB, bigB = coverage(predn, labels, scale)
+            stats.append((conf, size, coveredm, coveredM))
+            smallB, bigB = scale_boxes(pred[:, :4], scale[0, :], scale[1, :]), \
+                           scale_boxes(pred[:, :4], scale[2, :], scale[3, :])
+
+            '''plt.figure()
+            image = np.array(im[si] * 255).transpose((1, 2, 0)).astype(np.uint8).copy()
+            image = plot_box(image, smallB[predn[:, 4] > 0.25], 'pred')
+            image = plot_box(image, gt_box, 'gt')
+            plt.subplot(1, 2, 1)
+            plt.imshow(image)
+
+            plt.subplot(1, 2, 2)
+            image = np.array(im[si] * 255).transpose((1, 2, 0)).astype(np.uint8).copy()
+            image = plot_box(image, bigB[predn[:, 4] > 0.25], 'pred')
+            image = plot_box(image, gt_box, 'gt')
+            plt.imshow(image)
+            plt.show()'''
+
 
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
 
-    cover = cover_per_conf(*stats, n_conf, n_class)
+    coverm, coverM = cover_per_conf(*stats, n_conf, n_size)
+    matplotlib.use('TkAgg')
     plt.figure()
-    plt.imshow(cover)
+    plt.imshow(coverm)
     plt.show()
-    
+    plt.figure()
+    plt.imshow(coverM)
+    plt.show()
+    plt.figure()
+    plt.subplot(2, 2, 1)
+    plt.imshow(qalpha[0, :, :])
+    plt.subplot(2, 2, 2)
+    plt.imshow(qalpha[1, :, :])
+    plt.subplot(2, 2, 3)
+    plt.imshow(qalpha[2, :, :])
+    plt.subplot(2, 2, 4)
+    plt.imshow(qalpha[3, :, :])
+    plt.show()
+
 
     return qalpha.transpose(0, 2)[:, :-1, :], np.transpose(cover)
 
@@ -536,8 +541,8 @@ def parse_opt():
     parser.add_argument('--iou-thres', type=float, default=0.6, help='NMS IoU threshold')
     parser.add_argument('--iou-conformal', type=float, default=0.5, help='IoU threshold for conformal prediction')
     parser.add_argument('--split', type=float, default=0.5, help='Split factor of dataset')
-    parser.add_argument('--n-conf', type=int, default=10, help='Number of confidence interval')
-    parser.add_argument('--n-class', type=int, default=1, help='Number of class interval')
+    parser.add_argument('--n-conf', type=int, default=5, help='Number of confidence interval')
+    parser.add_argument('--n-size', type=int, default=5, help='Number of class interval')
     parser.add_argument('--risk', type=float, default=0.95, help='Coverage Rate')
     parser.add_argument('--task', default='val', help='train, val, test, speed or study')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')

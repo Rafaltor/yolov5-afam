@@ -1,0 +1,15 @@
+names:
+- person
+- rider
+- car
+- bus
+- truck
+- bike
+- motor
+- traffic_light
+- traffic sign
+- train
+nc: 10
+path: C:\Users\Paul-Maxence Baraton\OneDrive\Documents\TEAMAWARE\datasets\bdd100kv2
+val: .\images\val\
+train: .\images\train\

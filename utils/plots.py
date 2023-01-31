@@ -487,3 +487,30 @@ def save_one_box(xyxy, im, file=Path('im.jpg'), gain=1.02, pad=10, square=False,
         # cv2.imwrite(f, crop)  # https://github.com/ultralytics/yolov5/issues/7007 chroma subsampling issue
         Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)).save(f, quality=95, subsampling=0)
     return crop
+
+
+def plot_box(image, bboxes, t):
+    # Need the image height and width to denormalize
+    # the bounding box coordinates
+    h, w, _ = image.shape
+
+    for box_num, box in enumerate(bboxes):
+        x1, y1, x2, y2 = box[:4]
+        # denormalize the coordinates
+        xmin = int(x1)
+        ymin = int(y1)
+        xmax = int(x2)
+        ymax = int(y2)
+
+        if t == 'gt':
+            cv2.rectangle(image, (xmin, ymin), (xmax, ymax), color= (0, 255, 0), thickness=1)
+        elif t == 'pred':
+            cv2.rectangle(image, (xmin, ymin), (xmax, ymax), color=(255, 0, 0), thickness=1)
+
+        font_scale = min(1, max(3, int(w / 500)))
+        font_thickness = min(2, max(10, int(w / 50)))
+
+        p1, p2 = (int(xmin), int(ymin)), (int(xmax), int(ymax))
+        # Text width and height
+
+    return image
