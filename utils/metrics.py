@@ -189,7 +189,7 @@ def cover_per_conf(conf, size, tp_coverm, tp_coverM, n_conf, n_size):
 
     # Sort by Confidence
     i = np.argsort(-conf)
-    tp_cover, size, conf = tp_cover[i], size[i], conf[i]
+    tp_coverm, tp_coverM, size, conf = tp_coverm[i], tp_coverM[i], size[i], conf[i]
 
     coverm, coverM, count = np.zeros([n_conf, n_size]), np.zeros([n_conf, n_size]), np.zeros([n_conf, n_size])
 
