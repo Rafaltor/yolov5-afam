@@ -42,6 +42,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+from scipy.optimize import linear_sum_assignment
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 FILE = Path(__file__).resolve()
@@ -75,7 +76,7 @@ def save_one_json(predn, jdict, path, class_map):
             'score': round(p[4], 5)})
 
 
-def scale_boxes(pred, ax, ay):
+def scale_boxes(pred, scale):
     '''
     Returns scaled rectangle of pred:
         box = lam * pred, (Array[N, 4])
@@ -86,13 +87,10 @@ def scale_boxes(pred, ax, ay):
         box (Array[N, 4]), scaled prediction
     '''
     box = torch.clone(pred)
-    cx, cy = (box[:, 2] + box[:, 0]) / 2, (box[:, 3] + box[:, 1]) / 2
-    ratioX = (box[:, 2] - box[:, 0]) * ax / 2
-    ratioY = (box[:, 3] - box[:, 1]) * ay / 2
-    box[:, 0] = cx - ratioX
-    box[:, 1] = cy - ratioY
-    box[:, 2] = cx + ratioX
-    box[:, 3] = cy + ratioY
+    box[:, 0] = pred[:, 0] - scale.T[:, 0]
+    box[:, 1] = pred[:, 1] - scale.T[:, 1]
+    box[:, 2] = pred[:, 2] + scale.T[:, 2]
+    box[:, 3] = pred[:, 3] + scale.T[:, 3]
     return box
 
 
@@ -128,19 +126,15 @@ def find_scales(gt, pred):
         am, aM (Array[N, 2]), scale factor for iop = 1 and iog = 1
     """
     scale = torch.zeros(pred.shape[0], 4)
-    cx, cy = (pred[:, 2] + pred[:, 0]) / 2, (pred[:, 3] + pred[:, 1]) / 2
-    ax1, ax2 = 2 * (gt[:, 2] - cx) / (pred[:, 2] - pred[:, 0]), 2 * (cx - gt[:, 0]) / (pred[:, 2] - pred[:, 0])
-    ay1, ay2 = 2 * (gt[:, 3] - cy) / (pred[:, 3] - pred[:, 1]), 2 * (cy - gt[:, 1]) / (pred[:, 3] - pred[:, 1])
 
-    scale[:, 0], scale[:, 1] = torch.minimum(ax1, ax2), torch.minimum(ay1, ay2)
-    scale[:, 2], scale[:, 3] = torch.maximum(ax1, ax2), torch.maximum(ay1, ay2)
+    scale[:, 2], scale[:, 0] = (gt[:, 2] - pred[:, 2]), (pred[:, 0] - gt[:, 0])
+    scale[:, 3], scale[:, 1] = (gt[:, 3] - pred[:, 3]), (pred[:, 1] - gt[:, 1])
 
-    #scale[:, 0], scale[:, 1], scale[:, 2], scale[:, 3] = gt[:, 0] - pred[:, 0], gt[:, 1] - pred[:, 1], pred[:, 2] - gt[:, 2], pred[:, 3] - gt[:, 3]
 
     return scale
 
 
-def process_score(detections, labels, iou_thres, n_conf, n_size):
+def calibration(detections, labels, iou_thres, n_conf, n_size):
     """
         Return the score for each label according to the conformal learning theory.
         Both sets of boxes are in (x1, y1, x2, y2) format.
@@ -154,6 +148,7 @@ def process_score(detections, labels, iou_thres, n_conf, n_size):
         Returns:
             scores (Array[M, 1]), Scores for each label
     """
+
     conf = detections[:, 4]
     order = np.argsort(-conf.cpu())
     conf, detections = conf[order], detections[order]
@@ -161,9 +156,21 @@ def process_score(detections, labels, iou_thres, n_conf, n_size):
     iou = box_iou(labels[:, 1:], detections[:, :4])
     correct_class = labels[:, 0:1] == detections[:, 5]
 
-    ind = torch.nonzero((iou > iou_thres) * iou * correct_class)
-    labels_matched = labels[ind[:, 0], 1:]
-    detection_matched = detections[ind[:, 1], :4]
+    ind = linear_sum_assignment(1 - ((iou > iou_thres) * iou * correct_class))
+    ious = iou[ind[0], ind[1]]
+    if len(ind[0]) == 1:
+        if ious > iou_thres:
+            labels_matched = labels[ind[0], 1:]
+            detection_matched = detections[ind[1], :4]
+            conf = detections[ind[1], 4]
+        else:
+            labels_matched = torch.zeros(0, 4)
+            detection_matched = torch.zeros(0, 4)
+            conf = torch.zeros(0)
+    else:
+        labels_matched = labels[ind[0][ious > iou_thres], 1:]
+        detection_matched = detections[ind[1][ious > iou_thres], :4]
+        conf = detections[ind[1][ious > iou_thres], 4]
 
     scale = find_scales(labels_matched, detection_matched)
 
@@ -175,11 +182,64 @@ def process_score(detections, labels, iou_thres, n_conf, n_size):
     size_int = torch.linspace(0, 200, n_size, device=pred_area.device)
     pred_size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1
 
-    conf = detections[ind[:, 1], 4]
+
     conf_int = torch.linspace(0, 1, n_conf, device=conf.device)
     pred_conf = (conf >= torch.t(conf_int.expand(1, n_conf))).sum(0) - 1
 
     return scale, pred_size, pred_conf
+
+
+
+def prediction(detections, labels, qalpha, iou_thres, n_conf, n_size):
+    """
+        Return the score for each label according to the conformal learning theory.
+        Both sets of boxes are in (x1, y1, x2, y2) format.
+        Arguments:
+            detections (Array[N, 6]), x1, y1, x2, y2, conf, class
+            labels (Array[M, 5]), class, x1, y1, x2, y2
+            iou_thres (float) iou threshold for the score
+            n_conf (int) number of conf interval
+            n_class (int) number of class interval
+            nc (int) number of total class
+        Returns:
+            scores (Array[M, 1]), Scores for each label
+    """
+
+    conf = detections[:, 4]
+    order = np.argsort(-conf.cpu())
+    conf, detections = conf[order], detections[order]
+
+    iou = box_iou(labels[:, 1:], detections[:, :4])
+    correct_class = labels[:, 0:1] == detections[:, 5]
+
+    ind = linear_sum_assignment(1 - ((iou > iou_thres) * iou * correct_class))
+    ious = iou[ind[0], ind[1]]
+    if len(ind[0]) == 1:
+        if ious > iou_thres:
+            labels_matched = labels[ind[0], 1:]
+            detection_matched = detections[ind[1], :4]
+            conf = detections[ind[1], 4]
+        else:
+            labels_matched = torch.zeros(0, 4)
+            detection_matched = torch.zeros(0, 4)
+            conf = torch.zeros(0)
+    else:
+        labels_matched = labels[ind[0][ious > iou_thres], 1:]
+        detection_matched = detections[ind[1][ious > iou_thres], :4]
+        conf = detections[ind[1][ious > iou_thres], 4]
+
+    conf_int = torch.linspace(0, 1, n_conf, device=detections.device)
+    conf = (conf >= torch.t(conf_int.expand(1, n_conf))).sum(0) - 1
+
+    pred_area = boxes_area(detection_matched[:, :4])
+    size_int = torch.linspace(0, 96, n_size, device=pred_area.device)
+    size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1
+
+    scale = qalpha[:, conf, size]
+
+    coveredM, bigB = coverage(detection_matched, labels_matched, scale)
+
+    return coveredM, conf, size
 
 
 def coverage(detections, labels, scale):
@@ -193,18 +253,15 @@ def coverage(detections, labels, scale):
         Returns:
             cov_rate (Array[n_conf, n_classes]), cover rate for each conf and class
     """
-    smallB, bigB = scale_boxes(detections[:, :4], scale[0, :], scale[1, :]), \
-                   scale_boxes(detections[:, :4], scale[2, :], scale[3, :])
+    bigB = scale_boxes(detections[:, :4], scale)
 
-    iop = box_ioa(labels[:, 1:], smallB)
-    iog = box_ioa(bigB, labels[:, 1:])
-    iou = box_iou(labels[:, 1:], detections[:, :4])
+    iog = box_ioa(bigB, labels)
+    iou = box_iou(labels, detections)
     if len(labels):
-        coveredm = (iop.t()).max(1)[0] == 1
         coveredM = (iog).max(1)[0] == 1
-        return coveredm, coveredM, smallB, bigB
+        return coveredM, bigB
     else:
-        return torch.zeros(len(detections), device=labels.device), torch.zeros(len(detections), device=labels.device), torch.zeros(0, 4), torch.zeros(0, 4)
+        return torch.zeros(len(detections), device=labels.device), torch.zeros(0, 4)
 
 
 @torch.no_grad()
@@ -273,8 +330,6 @@ def run(
     iouv = torch.linspace(0.5, 0.95, 10, device=device)  # iou vector for mAP@0.5:0.95
     niou = iouv.numel()
 
-
-
     # Dataloader
     if not training:
         if pt and not single_cls:  # check --weights are trained on --data
@@ -296,7 +351,6 @@ def run(
                                      workers=workers,
                                      prefix=colorstr(f'{task}: '),
                                      split=split)
-
 
     seen = 0
     names = {k: v for k, v in enumerate(
@@ -351,10 +405,10 @@ def run(
                 # native-space labels
                 labels = torch.cat((labels[:, 0:1], tbox), 1)
 
-            scale, size, conf = process_score(predn, labels, iou_conformal, n_conf, n_size)
+            scale, size, conf = calibration(predn, labels, iou_conformal, n_conf, n_size)
+            if len(scale):
 
-            stats.append((scale, size, conf))
-
+                stats.append((scale, size, conf))
 
             callbacks.run('on_val_image_end', pred, predn, path, names, im[si])
 
@@ -364,20 +418,17 @@ def run(
 
     scale, size, conf = [torch.cat(x, 0).cpu() for x in zip(*stats)]  # to numpy
 
-
-
-
     qalpha = torch.ones(4, n_conf, n_size, device=predn.device)
 
     for co in range(qalpha.shape[1]):
         for cl in range(qalpha.shape[2]):
             if len(scale[torch.mul(conf == co, size == cl), :]):
-                qalpha[0, co, cl] = np.quantile(scale[torch.mul(conf == co, size == cl), 0], 1-risk)
-                qalpha[1, co, cl] = np.quantile(scale[torch.mul(conf == co, size == cl), 1], 1-risk)
+                qalpha[0, co, cl] = np.quantile(scale[torch.mul(conf == co, size == cl), 0], risk)
+                qalpha[1, co, cl] = np.quantile(scale[torch.mul(conf == co, size == cl), 1], risk)
                 qalpha[2, co, cl] = np.quantile(scale[torch.mul(conf == co, size == cl), 2], risk)
                 qalpha[3, co, cl] = np.quantile(scale[torch.mul(conf == co, size == cl), 3], risk)
 
-    #Plot relevants curves
+    # Plot relevants curves
     '''
     if plots:
         plt.figure(1)
@@ -428,9 +479,7 @@ def run(
         plt.pcolormesh(conf_int, classes_int, qalpha[3])
         plt.colorbar()
 
-
         print(1)
-
 
     stats = []
     pbar = tqdm(val, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
@@ -476,18 +525,10 @@ def run(
                 # native-space labels
                 labels = torch.cat((labels[:, 0:1], tbox), 1)
 
-            conf_int = torch.linspace(0, 1, n_conf, device=predn.device)
-            conf = (predn[:, 4] >= torch.t(conf_int.expand(1, n_conf))).sum(0) - 1
-
-            pred_area = boxes_area(predn[:, :4])
-            size_int = torch.linspace(0, 96, n_size, device=pred_area.device)
-            size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1
-
-            scale = qalpha[:, conf, size]
-            coveredm, coveredM, smallB, bigB = coverage(predn, labels, scale)
-            stats.append((conf, size, coveredm, coveredM))
-            smallB, bigB = scale_boxes(pred[:, :4], scale[0, :], scale[1, :]), \
-                           scale_boxes(pred[:, :4], scale[2, :], scale[3, :])
+            coveredM, conf, size = prediction(predn, labels, qalpha, iou_conformal, n_conf, n_size)
+            stats.append((conf, size, coveredM, coveredM))
+            #smallB, bigB = scale_boxes(pred[:, :4], scale[0, :], scale[1, :]), \
+            #               scale_boxes(pred[:, :4], scale[2, :], scale[3, :])
 
             '''plt.figure()
             image = np.array(im[si] * 255).transpose((1, 2, 0)).astype(np.uint8).copy()
@@ -505,10 +546,10 @@ def run(
             plt.imshow(image)
             plt.show()'''
 
-
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
 
     coverm, coverM = cover_per_conf(*stats, n_conf, n_size)
+    '''
     matplotlib.use('TkAgg')
     plt.figure()
     plt.imshow(coverm)
@@ -526,22 +567,23 @@ def run(
     plt.subplot(2, 2, 4)
     plt.imshow(qalpha[3, :, :])
     plt.show()
-
+    '''
+    print(coverM)
 
     return qalpha.transpose(0, 2)[:, :-1, :], np.transpose(coverm)
 
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data', type=str, default=ROOT / 'data/bdd100k.yaml', help='dataset.yaml path')
-    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'bdd100k.pt', help='model.pt path(s)')
+    parser.add_argument('--data', type=str, default=ROOT / 'data/coco.yaml', help='dataset.yaml path')
+    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov5s.pt', help='model.pt path(s)')
     parser.add_argument('--batch-size', type=int, default=32, help='batch size')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.001, help='confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.6, help='NMS IoU threshold')
-    parser.add_argument('--iou-conformal', type=float, default=0.4, help='IoU threshold for conformal prediction')
+    parser.add_argument('--iou-conformal', type=float, default=0.5, help='IoU threshold for conformal prediction')
     parser.add_argument('--split', type=float, default=0.5, help='Split factor of dataset')
-    parser.add_argument('--n-conf', type=int, default=20, help='Number of confidence interval')
+    parser.add_argument('--n-conf', type=int, default=2, help='Number of confidence interval')
     parser.add_argument('--n-size', type=int, default=1, help='Number of class interval')
     parser.add_argument('--risk', type=float, default=0.95, help='Coverage Rate')
     parser.add_argument('--task', default='val', help='train, val, test, speed or study')
