@@ -199,7 +199,7 @@ def cover_per_conf(conf, size, tp_coverm, tp_coverM, n_conf, n_size):
             coverm[i, j] += tp_coverm[np.multiply(conf == i, size == j)].sum()
             coverM[i, j] += tp_coverM[np.multiply(conf == i, size == j)].sum()
 
-    return coverm[:-1, :] / count[:-1, :], coverM[:-1, :] / count[:-1, :]
+    return coverm[:-1, :] / count[:-1, :], coverM[:-1, :] / count[:-1, :], count[:-1, :]
 
 
 def afam_per_class(tp_recall, tp_precision, conf, pred_cls, target_cls,
