@@ -156,17 +156,17 @@ def calibration(detections, labels, iou_thres, n_conf, n_size):
     iou = box_iou(labels[:, 1:], detections[:, :4])
     correct_class = labels[:, 0:1] == detections[:, 5]
 
-    ind = linear_sum_assignment(1 - ((iou > iou_thres) * iou * correct_class))
-    ious = iou[ind[0], ind[1]]
+    ind = linear_sum_assignment(1 - ((iou > iou_thres) * iou * correct_class).cpu())
+    ious = iou[ind[0], ind[1]].cpu()
     if len(ind[0]) == 1:
         if ious > iou_thres:
             labels_matched = labels[ind[0], 1:]
             detection_matched = detections[ind[1], :4]
             conf = detections[ind[1], 4]
         else:
-            labels_matched = torch.zeros(0, 4)
-            detection_matched = torch.zeros(0, 4)
-            conf = torch.zeros(0)
+            labels_matched = torch.zeros(0, 4, device=detections.device)
+            detection_matched = torch.zeros(0, 4, device=detections.device)
+            conf = torch.zeros(0, device=detections.device)
     else:
         labels_matched = labels[ind[0][ious > iou_thres], 1:]
         detection_matched = detections[ind[1][ious > iou_thres], :4]
@@ -212,17 +212,17 @@ def prediction(detections, labels, qalpha, iou_thres, n_conf, n_size):
     iou = box_iou(labels[:, 1:], detections[:, :4])
     correct_class = labels[:, 0:1] == detections[:, 5]
 
-    ind = linear_sum_assignment(1 - ((iou > iou_thres) * iou * correct_class))
-    ious = iou[ind[0], ind[1]]
+    ind = linear_sum_assignment(1 - ((iou > iou_thres) * iou * correct_class).cpu())
+    ious = iou[ind[0], ind[1]].cpu()
     if len(ind[0]) == 1:
         if ious > iou_thres:
             labels_matched = labels[ind[0], 1:]
             detection_matched = detections[ind[1], :4]
             conf = detections[ind[1], 4]
         else:
-            labels_matched = torch.zeros(0, 4)
-            detection_matched = torch.zeros(0, 4)
-            conf = torch.zeros(0)
+            labels_matched = torch.zeros(0, 4, device=detections.device)
+            detection_matched = torch.zeros(0, 4, device=detections.device)
+            conf = torch.zeros(0, device=detections.device)
     else:
         labels_matched = labels[ind[0][ious > iou_thres], 1:]
         detection_matched = detections[ind[1][ious > iou_thres], :4]
@@ -460,7 +460,7 @@ def run(
         plt.plot(qMy.max(0)[0])
         plt.plot(qMy.min(0)[0])
         plt.show()
-    '''
+    
     if plots:
         conf_int = np.linspace(0, 1, n_conf)
         classes_int = np.linspace(0, n_size + 1, n_size)
@@ -480,7 +480,7 @@ def run(
         plt.colorbar()
 
         print(1)
-
+    '''
     stats = []
     pbar = tqdm(val, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
