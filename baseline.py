@@ -236,10 +236,19 @@ def prediction(detections, labels, qalpha, iou_thres, n_conf, n_size):
     size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1
 
     scale = qalpha[:, conf, size]
+    '''n_conf, n_size = 5, 4
 
-    coveredM, bigB = coverage(detection_matched, labels_matched, scale)
+    conf_int = torch.linspace(0, 1, n_conf, device=detections.device)
+    conf = (conf >= torch.t(conf_int.expand(1, n_conf))).sum(0) - 1
 
-    return coveredM, conf, size
+    pred_area = boxes_area(detection_matched[:, :4])
+    size_int = torch.linspace(0, 96, n_size, device=pred_area.device)
+    size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1'''
+
+
+    coveredM, scale_x, scale_y = coverage(detection_matched, labels_matched, scale)
+
+    return coveredM, conf, size, scale_x, scale_y
 
 
 def coverage(detections, labels, scale):
@@ -254,14 +263,15 @@ def coverage(detections, labels, scale):
             cov_rate (Array[n_conf, n_classes]), cover rate for each conf and class
     """
     bigB = scale_boxes(detections[:, :4], scale)
-
+    scale_x = (bigB[:, 2] - bigB[:, 0]) / (detections[:, 2] - detections[:, 0])
+    scale_y = (bigB[:, 3] - bigB[:, 1]) / (detections[:, 3] - detections[:, 1])
     iog = box_ioa(bigB, labels)
     iou = box_iou(labels, detections)
     if len(labels):
         coveredM = (iog).max(1)[0] == 1
-        return coveredM, bigB
+        return coveredM, scale_x, scale_y
     else:
-        return torch.zeros(len(detections), device=labels.device), torch.zeros(0, 4)
+        return torch.zeros(len(detections), device=labels.device), torch.zeros(0), torch.zeros(0)
 
 
 @torch.no_grad()
@@ -481,7 +491,8 @@ def run(
 
         print(1)
     '''
-    stats = []
+    stats, proportion = [], []
+    tot = 0
     pbar = tqdm(val, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
         callbacks.run('on_val_batch_start')
@@ -524,9 +535,11 @@ def run(
                 scale_coords(im[si].shape[1:], tbox, shape, shapes[si][1])  # native-space labels
                 # native-space labels
                 labels = torch.cat((labels[:, 0:1], tbox), 1)
+            tot += len(labels)
 
-            coveredM, conf, size = prediction(predn, labels, qalpha, iou_conformal, n_conf, n_size)
-            stats.append((conf, size, coveredM, coveredM))
+            coveredM, conf, size, scale_x, scale_y = prediction(predn, labels, qalpha, iou_conformal, n_conf, n_size)
+            stats.append((conf, size, coveredM, scale_x, scale_y))
+
             #smallB, bigB = scale_boxes(pred[:, :4], scale[0, :], scale[1, :]), \
             #               scale_boxes(pred[:, :4], scale[2, :], scale[3, :])
 
@@ -548,7 +561,7 @@ def run(
 
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
 
-    coverm, coverM, count = cover_per_conf(*stats, n_conf, n_size)
+    coverm, count, Sx, Sy = cover_per_conf(*stats, n_conf, n_size)
     '''
     matplotlib.use('TkAgg')
     plt.figure()
@@ -568,9 +581,10 @@ def run(
     plt.imshow(qalpha[3, :, :])
     plt.show()
     '''
-    print(coverM)
 
-    return qalpha.transpose(0, 2)[:, :-1, :], np.transpose(coverm), np.transpose(count)
+
+
+    return qalpha.transpose(0, 2)[:, :-1, :], np.transpose(coverm), np.transpose(Sx), np.transpose(Sy)
 
 
 def parse_opt():

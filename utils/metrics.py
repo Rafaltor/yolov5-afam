@@ -172,7 +172,7 @@ def ap_per_size(tp_recall, tp_precision, conf, pred_size_cls, target_size_cls, p
 
     return ap
 
-def cover_per_conf(conf, size, tp_coverm, tp_coverM, n_conf, n_size):
+def cover_per_conf(conf, size, tp_cover, scale_x, scale_y, n_conf, n_size):
     """ Compute the average precision, given the recall and precision curves.
     Source: https://github.com/rafaelpadilla/Object-Detection-Metrics.
     # Arguments
@@ -189,17 +189,18 @@ def cover_per_conf(conf, size, tp_coverm, tp_coverM, n_conf, n_size):
 
     # Sort by Confidence
     i = np.argsort(-conf)
-    tp_coverm, tp_coverM, size, conf = tp_coverm[i], tp_coverM[i], size[i], conf[i]
+    tp_cover, size, conf, scale_x, scale_y = tp_cover[i], size[i], conf[i], scale_x[i], scale_y[i]
 
-    coverm, coverM, count = np.zeros([n_conf, n_size]), np.zeros([n_conf, n_size]), np.zeros([n_conf, n_size])
+    cover, s_x, s_y, count = np.zeros([n_conf, n_size]), np.zeros([n_conf, n_size]), np.zeros([n_conf, n_size]), np.zeros([n_conf, n_size])
 
     for i in range(n_conf-1):
         for j in range(n_size):
             count[i, j] += np.multiply(conf == i, size == j).sum()
-            coverm[i, j] += tp_coverm[np.multiply(conf == i, size == j)].sum()
-            coverM[i, j] += tp_coverM[np.multiply(conf == i, size == j)].sum()
+            cover[i, j] += tp_cover[np.multiply(conf == i, size == j)].sum()
+            s_x[i, j] += scale_x[np.multiply(conf == i, size == j)].sum()
+            s_y[i, j] += scale_y[np.multiply(conf == i, size == j)].sum()
 
-    return coverm[:-1, :] / count[:-1, :], coverM[:-1, :] / count[:-1, :], count[:-1, :]
+    return cover[:-1, :] / count[:-1, :], count[:-1, :], s_x[:-1, :] / count[:-1, :], s_y[:-1, :] / count[:-1, :]
 
 
 def afam_per_class(tp_recall, tp_precision, conf, pred_cls, target_cls,
