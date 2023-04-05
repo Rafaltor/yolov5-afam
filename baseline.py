@@ -271,7 +271,7 @@ def coverage(detections, labels, scale):
         coveredM = (iog).max(1)[0] == 1
         return coveredM, scale_x, scale_y
     else:
-        return torch.zeros(len(detections), device=labels.device), torch.zeros(0), torch.zeros(0)
+        return torch.zeros(len(detections), device=labels.device), torch.zeros(0, device=labels.device), torch.zeros(0, device=labels.device)
 
 
 @torch.no_grad()
