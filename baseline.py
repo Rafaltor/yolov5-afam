@@ -229,21 +229,21 @@ def prediction(detections, labels, qalpha, iou_thres, n_conf, n_size):
         conf = detections[ind[1][ious > iou_thres], 4]
 
     conf_int = torch.linspace(0, 1, n_conf, device=detections.device)
-    conf = (conf >= torch.t(conf_int.expand(1, n_conf))).sum(0) - 1
+    conf_temp = (conf >= torch.t(conf_int.expand(1, n_conf))).sum(0) - 1
 
     pred_area = boxes_area(detection_matched[:, :4])
     size_int = torch.linspace(0, 96, n_size, device=pred_area.device)
     size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1
 
-    scale = qalpha[:, conf, size]
-    '''n_conf, n_size = 5, 4
+    scale = qalpha[:, conf_temp, size]
+    n_conf, n_size = 6, 5
 
     conf_int = torch.linspace(0, 1, n_conf, device=detections.device)
     conf = (conf >= torch.t(conf_int.expand(1, n_conf))).sum(0) - 1
 
     pred_area = boxes_area(detection_matched[:, :4])
     size_int = torch.linspace(0, 96, n_size, device=pred_area.device)
-    size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1'''
+    size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1
 
 
     coveredM, scale_x, scale_y = coverage(detection_matched, labels_matched, scale)
