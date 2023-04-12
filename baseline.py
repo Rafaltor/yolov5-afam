@@ -561,7 +561,7 @@ def run(
 
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
 
-    coverm, count, Sx, Sy = cover_per_conf(*stats, n_conf, n_size)
+    coverm, count, Sx, Sy = cover_per_conf(*stats, 6, 5)
     '''
     matplotlib.use('TkAgg')
     plt.figure()
