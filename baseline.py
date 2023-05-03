@@ -179,7 +179,6 @@ def calibration(detections, labels, iou_thres, n_conf, n_size):
     # pred_class = (classes*n_class/nc >= torch.t(class_int.expand(1, n_class))).sum(0) - 1
 
     pred_area = boxes_area(detection_matched[:, :4])
-
     size_int = torch.linspace(0, 200, n_size, device=pred_area.device)
     pred_size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1
 
@@ -233,15 +232,12 @@ def prediction(detections, labels, qalpha, iou_thres, n_conf, n_size):
     conf = (conf >= torch.t(conf_int.expand(1, n_conf))).sum(0) - 1
 
     pred_area = boxes_area(detection_matched[:, :4])
-    size_int = torch.linspace(0, 96, n_size, device=pred_area.device)
+    size_int = torch.linspace(0, 200, n_size, device=pred_area.device)
     size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1
 
-<<<<<<< HEAD
-    scale = qalpha[:, conf_temp, size]
-=======
     scale = qalpha[:, conf, size]
     '''n_conf, n_size = 5, 4
->>>>>>> parent of 95c5a7c (Conditinnal proof)
+
 
     conf_int = torch.linspace(0, 1, n_conf, device=detections.device)
     conf = (conf >= torch.t(conf_int.expand(1, n_conf))).sum(0) - 1
