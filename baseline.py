@@ -179,6 +179,7 @@ def calibration(detections, labels, iou_thres, n_conf, n_size):
     # pred_class = (classes*n_class/nc >= torch.t(class_int.expand(1, n_class))).sum(0) - 1
 
     pred_area = boxes_area(detection_matched[:, :4])
+
     size_int = torch.linspace(0, 200, n_size, device=pred_area.device)
     pred_size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1
 
@@ -236,7 +237,6 @@ def prediction(detections, labels, qalpha, iou_thres, n_conf, n_size):
     size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1
 
     scale = qalpha[:, conf_temp, size]
-    n_conf, n_size = 6, 5
 
     conf_int = torch.linspace(0, 1, n_conf, device=detections.device)
     conf = (conf >= torch.t(conf_int.expand(1, n_conf))).sum(0) - 1
@@ -561,7 +561,7 @@ def run(
 
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
 
-    coverm, count, Sx, Sy = cover_per_conf(*stats, 6, 5)
+    coverm, count, Sx, Sy = cover_per_conf(*stats, n_conf, n_size)
     '''
     matplotlib.use('TkAgg')
     plt.figure()
@@ -584,7 +584,7 @@ def run(
 
 
 
-    return qalpha.transpose(0, 2)[:, :-1, :], np.transpose(coverm), np.transpose(Sx), np.transpose(Sy)
+    return qalpha.transpose(0, 2)[:, :-1, :], np.transpose(count), np.transpose(coverm), np.transpose(Sx), np.transpose(Sy)
 
 
 def parse_opt():
