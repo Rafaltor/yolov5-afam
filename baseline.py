@@ -230,20 +230,25 @@ def prediction(detections, labels, qalpha, iou_thres, n_conf, n_size):
         conf = detections[ind[1][ious > iou_thres], 4]
 
     conf_int = torch.linspace(0, 1, n_conf, device=detections.device)
-    conf_temp = (conf >= torch.t(conf_int.expand(1, n_conf))).sum(0) - 1
+    conf = (conf >= torch.t(conf_int.expand(1, n_conf))).sum(0) - 1
 
     pred_area = boxes_area(detection_matched[:, :4])
-    size_int = torch.linspace(0, 200, n_size, device=pred_area.device)
+    size_int = torch.linspace(0, 96, n_size, device=pred_area.device)
     size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1
 
+<<<<<<< HEAD
     scale = qalpha[:, conf_temp, size]
+=======
+    scale = qalpha[:, conf, size]
+    '''n_conf, n_size = 5, 4
+>>>>>>> parent of 95c5a7c (Conditinnal proof)
 
     conf_int = torch.linspace(0, 1, n_conf, device=detections.device)
     conf = (conf >= torch.t(conf_int.expand(1, n_conf))).sum(0) - 1
 
     pred_area = boxes_area(detection_matched[:, :4])
-    size_int = torch.linspace(0, 200, n_size, device=pred_area.device)
-    size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1
+    size_int = torch.linspace(0, 96, n_size, device=pred_area.device)
+    size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1'''
 
 
     coveredM, scale_x, scale_y = coverage(detection_matched, labels_matched, scale)
@@ -589,8 +594,8 @@ def run(
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data', type=str, default=ROOT / 'data/bdd100k.yaml', help='dataset.yaml path')
-    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'bdd100k.pt', help='model.pt path(s)')
+    parser.add_argument('--data', type=str, default=ROOT / 'data/coco.yaml', help='dataset.yaml path')
+    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov5s.pt', help='model.pt path(s)')
     parser.add_argument('--batch-size', type=int, default=32, help='batch size')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.001, help='confidence threshold')
@@ -599,7 +604,7 @@ def parse_opt():
     parser.add_argument('--split', type=float, default=0.5, help='Split factor of dataset')
     parser.add_argument('--n-conf', type=int, default=2, help='Number of confidence interval')
     parser.add_argument('--n-size', type=int, default=1, help='Number of class interval')
-    parser.add_argument('--risk', type=float, default=0.9, help='Coverage Rate')
+    parser.add_argument('--risk', type=float, default=0.95, help='Coverage Rate')
     parser.add_argument('--task', default='val', help='train, val, test, speed or study')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--workers', type=int, default=8, help='max dataloader workers (per RANK in DDP mode)')
