@@ -561,7 +561,7 @@ def run(
 
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
 
-    coverm, count, Sx, Sy = cover_per_conf(*stats, 6, 5)
+    coverm, count, Sx, Sy = cover_per_conf(*stats, n_conf, n_size)
     '''
     matplotlib.use('TkAgg')
     plt.figure()
@@ -584,7 +584,7 @@ def run(
 
 
 
-    return qalpha.transpose(0, 2)[:, :-1, :], np.transpose(coverm), np.transpose(Sx), np.transpose(Sy)
+    return qalpha.transpose(0, 2)[:, :-1, :], np.transpose(count), np.transpose(coverm), np.transpose(Sx), np.transpose(Sy)
 
 
 def parse_opt():
