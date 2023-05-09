@@ -186,11 +186,11 @@ def calibration(detections, labels, iou_thres, n_conf, n_size):
     conf_int = torch.linspace(0, 1, n_conf, device=conf.device)
     pred_conf = (conf >= torch.t(conf_int.expand(1, n_conf))).sum(0) - 1
 
-    return scale, pred_size, pred_conf
+    return scale, pred_area, conf
 
 
 
-def prediction(detections, labels, qalpha, iou_thres, n_conf, n_size):
+def prediction(detections, labels, qalpha, iou_thres, conf_int, size_int, n_conf, n_size):
     """
         Return the score for each label according to the conformal learning theory.
         Both sets of boxes are in (x1, y1, x2, y2) format.
@@ -228,12 +228,11 @@ def prediction(detections, labels, qalpha, iou_thres, n_conf, n_size):
         detection_matched = detections[ind[1][ious > iou_thres], :4]
         conf = detections[ind[1][ious > iou_thres], 4]
 
-    conf_int = torch.linspace(0, 1, n_conf, device=detections.device)
-    conf = (conf >= torch.t(conf_int.expand(1, n_conf))).sum(0) - 1
+
+    conf = (conf >= torch.t(torch.tensor(conf_int).expand(1, n_conf))).sum(0) - 1
 
     pred_area = boxes_area(detection_matched[:, :4])
-    size_int = torch.linspace(0, 200, n_size, device=pred_area.device)
-    size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1
+    size = (pred_area > torch.t(torch.tensor(size_int).expand(1, n_size))).sum(0) - 1
 
     scale = qalpha[:, conf, size]
     '''n_conf, n_size = 5, 4
@@ -428,7 +427,13 @@ def run(
     # Compute metrics
 
     scale, size, conf = [torch.cat(x, 0).cpu() for x in zip(*stats)]  # to numpy
+    size_ind = (torch.linspace(0, 1, n_size+1, device=size.device)[:-1]*len(size)).int()
+    size_int = np.sort(size)[size_ind]
+    conf_ind = (torch.linspace(0, 1, n_conf + 1, device=conf.device)[:-1] * len(conf)).int()
+    conf_int = np.sort(conf)[conf_ind]
 
+    conf = (conf >= torch.t(torch.tensor(conf_int).expand(1, n_conf))).sum(0) - 1
+    size = (size > torch.t(torch.tensor(size_int).expand(1, n_size))).sum(0) - 1
     qalpha = torch.ones(4, n_conf, n_size, device=predn.device)
 
     for co in range(qalpha.shape[1]):
@@ -538,7 +543,7 @@ def run(
                 labels = torch.cat((labels[:, 0:1], tbox), 1)
             tot += len(labels)
 
-            coveredM, conf, size, scale_x, scale_y = prediction(predn, labels, qalpha, iou_conformal, n_conf, n_size)
+            coveredM, conf, size, scale_x, scale_y = prediction(predn, labels, qalpha, iou_conformal, conf_int, size_int, n_conf, n_size)
             stats.append((conf, size, coveredM, scale_x, scale_y))
 
             #smallB, bigB = scale_boxes(pred[:, :4], scale[0, :], scale[1, :]), \
@@ -590,16 +595,16 @@ def run(
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data', type=str, default=ROOT / 'data/coco.yaml', help='dataset.yaml path')
-    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov5s.pt', help='model.pt path(s)')
+    parser.add_argument('--data', type=str, default=ROOT / 'data/bdd100k.yaml', help='dataset.yaml path')
+    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'bdd100k.pt', help='model.pt path(s)')
     parser.add_argument('--batch-size', type=int, default=32, help='batch size')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.001, help='confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.6, help='NMS IoU threshold')
     parser.add_argument('--iou-conformal', type=float, default=0.5, help='IoU threshold for conformal prediction')
     parser.add_argument('--split', type=float, default=0.5, help='Split factor of dataset')
-    parser.add_argument('--n-conf', type=int, default=2, help='Number of confidence interval')
-    parser.add_argument('--n-size', type=int, default=1, help='Number of class interval')
+    parser.add_argument('--n-conf', type=int, default=5, help='Number of confidence interval')
+    parser.add_argument('--n-size', type=int, default=5, help='Number of class interval')
     parser.add_argument('--risk', type=float, default=0.95, help='Coverage Rate')
     parser.add_argument('--task', default='val', help='train, val, test, speed or study')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
