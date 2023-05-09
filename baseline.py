@@ -211,7 +211,7 @@ def prediction(detections, labels, qalpha, iou_thres, conf_int, size_int, n_conf
 
     iou = box_iou(labels[:, 1:], detections[:, :4])
     correct_class = labels[:, 0:1] == detections[:, 5]
-
+    print(conf.device, conf_int.device)
     ind = linear_sum_assignment(1 - ((iou > iou_thres) * iou * correct_class).cpu())
     ious = iou[ind[0], ind[1]].cpu()
     if len(ind[0]) == 1:
