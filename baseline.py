@@ -211,7 +211,7 @@ def prediction(detections, labels, qalpha, iou_thres, conf_int, size_int, n_conf
 
     iou = box_iou(labels[:, 1:], detections[:, :4])
     correct_class = labels[:, 0:1] == detections[:, 5]
-    print(conf.device, conf_int.device)
+
     ind = linear_sum_assignment(1 - ((iou > iou_thres) * iou * correct_class).cpu())
     ious = iou[ind[0], ind[1]].cpu()
     if len(ind[0]) == 1:
@@ -229,10 +229,10 @@ def prediction(detections, labels, qalpha, iou_thres, conf_int, size_int, n_conf
         conf = detections[ind[1][ious > iou_thres], 4]
 
 
-    conf = (conf >= torch.t(torch.tensor(conf_int).expand(1, n_conf))).sum(0) - 1
+    conf = (conf >= torch.t(torch.tensor(conf_int, device=conf.device).expand(1, n_conf))).sum(0) - 1
 
     pred_area = boxes_area(detection_matched[:, :4])
-    size = (pred_area > torch.t(torch.tensor(size_int).expand(1, n_size))).sum(0) - 1
+    size = (pred_area > torch.t(torch.tensor(size_int, device=pred_area.device).expand(1, n_size))).sum(0) - 1
 
     scale = qalpha[:, conf, size]
     '''n_conf, n_size = 5, 4
@@ -590,7 +590,7 @@ def run(
 
 
 
-    return qalpha.transpose(0, 2)[:, :-1, :], np.transpose(count), np.transpose(coverm), np.transpose(Sx), np.transpose(Sy)
+    return qalpha.transpose(0, 2)[:, :, :], np.transpose(count), np.transpose(coverm), np.transpose(Sx), np.transpose(Sy)
 
 
 def parse_opt():
@@ -603,8 +603,8 @@ def parse_opt():
     parser.add_argument('--iou-thres', type=float, default=0.6, help='NMS IoU threshold')
     parser.add_argument('--iou-conformal', type=float, default=0.5, help='IoU threshold for conformal prediction')
     parser.add_argument('--split', type=float, default=0.5, help='Split factor of dataset')
-    parser.add_argument('--n-conf', type=int, default=5, help='Number of confidence interval')
-    parser.add_argument('--n-size', type=int, default=5, help='Number of class interval')
+    parser.add_argument('--n-conf', type=int, default=1, help='Number of confidence interval')
+    parser.add_argument('--n-size', type=int, default=1, help='Number of class interval')
     parser.add_argument('--risk', type=float, default=0.95, help='Coverage Rate')
     parser.add_argument('--task', default='val', help='train, val, test, speed or study')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
