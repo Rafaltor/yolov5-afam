@@ -179,12 +179,6 @@ def calibration(detections, labels, iou_thres, n_conf, n_size):
     # pred_class = (classes*n_class/nc >= torch.t(class_int.expand(1, n_class))).sum(0) - 1
 
     pred_area = boxes_area(detection_matched[:, :4])
-    size_int = torch.linspace(0, 200, n_size, device=pred_area.device)
-    pred_size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1
-
-
-    conf_int = torch.linspace(0, 1, n_conf, device=conf.device)
-    pred_conf = (conf >= torch.t(conf_int.expand(1, n_conf))).sum(0) - 1
 
     return scale, pred_area, conf
 
@@ -229,10 +223,13 @@ def prediction(detections, labels, qalpha, iou_thres, conf_int, size_int, n_conf
         conf = detections[ind[1][ious > iou_thres], 4]
 
 
-    conf = (conf >= torch.t(torch.tensor(conf_int, device=conf.device).expand(1, n_conf))).sum(0) - 1
-
     pred_area = boxes_area(detection_matched[:, :4])
     size = (pred_area > torch.t(torch.tensor(size_int, device=pred_area.device).expand(1, n_size))).sum(0) - 1
+
+    confidence = torch.ones(conf.shape).long()
+    for si in range(n_size):
+        confidence[size == si] = (conf[size == si] >= torch.t(torch.tensor(conf_int[si]).expand(1, n_conf))).sum(0) - 1
+    conf = confidence
 
     scale = qalpha[:, conf, size]
     '''n_conf, n_size = 5, 4
@@ -429,11 +426,14 @@ def run(
     scale, size, conf = [torch.cat(x, 0).cpu() for x in zip(*stats)]  # to numpy
     size_ind = (torch.linspace(0, 1, n_size+1, device=size.device)[:-1]*len(size)).int()
     size_int = np.sort(size)[size_ind]
-    conf_ind = (torch.linspace(0, 1, n_conf + 1, device=conf.device)[:-1] * len(conf)).int()
-    conf_int = np.sort(conf)[conf_ind]
-
-    conf = (conf >= torch.t(torch.tensor(conf_int).expand(1, n_conf))).sum(0) - 1
     size = (size > torch.t(torch.tensor(size_int).expand(1, n_size))).sum(0) - 1
+    conf_int = np.zeros([n_size, n_conf])
+    confidence = torch.ones(conf.shape).long()
+    for si in range(n_size):
+        conf_ind = (torch.linspace(0, 1, n_conf + 1, device=conf.device)[:-1] * len(size[size == si])).int()
+        conf_int[si] = np.sort(conf[size == si])[conf_ind]
+        confidence[size == si] = (conf[size == si] >= torch.t(torch.tensor(conf_int[si]).expand(1, n_conf))).sum(0) - 1
+    conf = confidence
     qalpha = torch.ones(4, n_conf, n_size, device=predn.device)
 
     for co in range(qalpha.shape[1]):
