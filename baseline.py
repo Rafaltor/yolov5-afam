@@ -226,9 +226,9 @@ def prediction(detections, labels, qalpha, iou_thres, conf_int, size_int, n_conf
     pred_area = boxes_area(detection_matched[:, :4])
     size = (pred_area > torch.t(torch.tensor(size_int, device=pred_area.device).expand(1, n_size))).sum(0) - 1
 
-    confidence = torch.ones(conf.shape).long()
+    confidence = torch.ones(conf.shape, device=conf.device).long()
     for si in range(n_size):
-        confidence[size == si] = (conf[size == si] >= torch.t(torch.tensor(conf_int[si]).expand(1, n_conf))).sum(0) - 1
+        confidence[size == si] = (conf[size == si] >= torch.t(torch.tensor(conf_int[si], device=conf.device).expand(1, n_conf))).sum(0) - 1
     conf = confidence
 
     scale = qalpha[:, conf, size]
