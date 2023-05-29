@@ -184,7 +184,7 @@ def calibration(detections, labels, iou_thres, n_conf, n_size):
 
 
 
-def prediction(detections, labels, qalpha, iou_thres, conf_int, size_int, n_conf, n_size):
+def prediction(detections, labels, qalpha, iou_thres, conf_int, size_int, n_conf, n_size, conf_int_l, size_int_l):
     """
         Return the score for each label according to the conformal learning theory.
         Both sets of boxes are in (x1, y1, x2, y2) format.
@@ -224,14 +224,15 @@ def prediction(detections, labels, qalpha, iou_thres, conf_int, size_int, n_conf
 
 
     pred_area = boxes_area(detection_matched[:, :4])
-    size = (pred_area > torch.t(torch.tensor(size_int, device=pred_area.device).expand(1, n_size))).sum(0) - 1
+    size_temp = (pred_area > torch.t(torch.tensor(size_int, device=pred_area.device).expand(1, n_size))).sum(0) - 1
 
     confidence = torch.ones(conf.shape, device=conf.device).long()
     for si in range(n_size):
-        confidence[size == si] = (conf[size == si] >= torch.t(torch.tensor(conf_int[si], device=conf.device).expand(1, n_conf))).sum(0) - 1
-    conf = confidence
+        confidence[size_temp == si] = (conf[size_temp == si] >= torch.t(torch.tensor(conf_int[si], device=conf.device).expand(1, n_conf))).sum(0) - 1
 
-    scale = qalpha[:, conf, size]
+    if (confidence.sum() != 0):
+        print(confidence)
+    scale = qalpha[:, confidence, size_temp]
     '''n_conf, n_size = 5, 4
 
 
@@ -244,6 +245,14 @@ def prediction(detections, labels, qalpha, iou_thres, conf_int, size_int, n_conf
 
 
     coveredM, scale_x, scale_y = coverage(detection_matched, labels_matched, scale)
+
+    size = (pred_area > torch.t(torch.tensor(size_int_l, device=pred_area.device).expand(1, 5))).sum(0) - 1
+
+    confidence = torch.ones(conf.shape, device=conf.device).long()
+    for si in range(5):
+        confidence[size == si] = (conf[size == si] >= torch.t(
+            torch.tensor(conf_int_l[si], device=conf.device).expand(1, 5))).sum(0) - 1
+    conf = confidence
 
     return coveredM, conf, size, scale_x, scale_y
 
@@ -424,14 +433,28 @@ def run(
     # Compute metrics
 
     scale, size, conf = [torch.cat(x, 0).cpu() for x in zip(*stats)]  # to numpy
+
+    size_ind = (torch.linspace(0, 1, 5 + 1, device=size.device)[:-1] * len(size)).int()
+    size_int_l = np.sort(size)[size_ind]
+    size_int_l[0] = 0
+    size_temp = (size > torch.t(torch.tensor(size_int_l).expand(1, 5))).sum(0) - 1
+    conf_int_l = np.zeros([5, 5])
+    confidence = torch.ones(conf.shape).long()
+    for si in range(5):
+        conf_ind = (torch.linspace(0, 1, 5 + 1, device=conf.device)[:-1] * len(size_temp[size_temp == si])).int()
+        conf_int_l[si] = np.sort(conf[size_temp == si])[conf_ind]
+        conf_int_l[si, 0] = 0
+
     size_ind = (torch.linspace(0, 1, n_size+1, device=size.device)[:-1]*len(size)).int()
     size_int = np.sort(size)[size_ind]
+    size_int = 0
     size = (size > torch.t(torch.tensor(size_int).expand(1, n_size))).sum(0) - 1
     conf_int = np.zeros([n_size, n_conf])
     confidence = torch.ones(conf.shape).long()
     for si in range(n_size):
         conf_ind = (torch.linspace(0, 1, n_conf + 1, device=conf.device)[:-1] * len(size[size == si])).int()
         conf_int[si] = np.sort(conf[size == si])[conf_ind]
+        conf_int[si] = 0
         confidence[size == si] = (conf[size == si] >= torch.t(torch.tensor(conf_int[si]).expand(1, n_conf))).sum(0) - 1
     conf = confidence
     qalpha = torch.ones(4, n_conf, n_size, device=predn.device)
@@ -443,6 +466,7 @@ def run(
                 qalpha[1, co, cl] = np.quantile(scale[torch.mul(conf == co, size == cl), 1], risk)
                 qalpha[2, co, cl] = np.quantile(scale[torch.mul(conf == co, size == cl), 2], risk)
                 qalpha[3, co, cl] = np.quantile(scale[torch.mul(conf == co, size == cl), 3], risk)
+
 
     # Plot relevants curves
     '''
@@ -543,7 +567,7 @@ def run(
                 labels = torch.cat((labels[:, 0:1], tbox), 1)
             tot += len(labels)
 
-            coveredM, conf, size, scale_x, scale_y = prediction(predn, labels, qalpha, iou_conformal, conf_int, size_int, n_conf, n_size)
+            coveredM, conf, size, scale_x, scale_y = prediction(predn, labels, qalpha, iou_conformal, conf_int, size_int, n_conf, n_size, conf_int_l, size_int_l)
             stats.append((conf, size, coveredM, scale_x, scale_y))
 
             #smallB, bigB = scale_boxes(pred[:, :4], scale[0, :], scale[1, :]), \
@@ -567,7 +591,7 @@ def run(
 
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
 
-    coverm, count, Sx, Sy = cover_per_conf(*stats, n_conf, n_size)
+    coverm, count, Sx, Sy = cover_per_conf(*stats, 5, 5)
     '''
     matplotlib.use('TkAgg')
     plt.figure()
@@ -603,9 +627,9 @@ def parse_opt():
     parser.add_argument('--iou-thres', type=float, default=0.6, help='NMS IoU threshold')
     parser.add_argument('--iou-conformal', type=float, default=0.5, help='IoU threshold for conformal prediction')
     parser.add_argument('--split', type=float, default=0.5, help='Split factor of dataset')
-    parser.add_argument('--n-conf', type=int, default=5, help='Number of confidence interval')
-    parser.add_argument('--n-size', type=int, default=5, help='Number of class interval')
-    parser.add_argument('--risk', type=float, default=0.95, help='Coverage Rate')
+    parser.add_argument('--n-conf', type=int, default=1, help='Number of confidence interval')
+    parser.add_argument('--n-size', type=int, default=1, help='Number of class interval')
+    parser.add_argument('--risk', type=float, default=0.97, help='Coverage Rate')
     parser.add_argument('--task', default='val', help='train, val, test, speed or study')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--workers', type=int, default=8, help='max dataloader workers (per RANK in DDP mode)')
