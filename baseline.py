@@ -134,7 +134,7 @@ def find_scales(gt, pred):
     return scale
 
 
-def calibration(detections, labels, iou_thres, n_conf, n_size):
+def calibration(detections, labels, iou_thres):
     """
         Return the score for each label according to the conformal learning theory.
         Both sets of boxes are in (x1, y1, x2, y2) format.
@@ -301,8 +301,8 @@ def run(
         callbacks=Callbacks(),
         risk=0.95,
         iou_conformal=0.5,
-        n_conf=10,
-        n_size=3,
+        n_conf=5,
+        n_size=5,
         split=0.5
 
 ):
@@ -421,7 +421,7 @@ def run(
                 # native-space labels
                 labels = torch.cat((labels[:, 0:1], tbox), 1)
 
-            scale, size, conf = calibration(predn, labels, iou_conformal, n_conf, n_size)
+            scale, size, conf = calibration(predn, labels, iou_conformal)
             if len(scale):
 
                 stats.append((scale, size, conf))
@@ -447,14 +447,14 @@ def run(
 
     size_ind = (torch.linspace(0, 1, n_size+1, device=size.device)[:-1]*len(size)).int()
     size_int = np.sort(size)[size_ind]
-    size_int = 0
+    size_int_l[0] = 0
     size = (size > torch.t(torch.tensor(size_int).expand(1, n_size))).sum(0) - 1
     conf_int = np.zeros([n_size, n_conf])
     confidence = torch.ones(conf.shape).long()
     for si in range(n_size):
         conf_ind = (torch.linspace(0, 1, n_conf + 1, device=conf.device)[:-1] * len(size[size == si])).int()
         conf_int[si] = np.sort(conf[size == si])[conf_ind]
-        conf_int[si] = 0
+        conf_int[si, 0] = 0
         confidence[size == si] = (conf[size == si] >= torch.t(torch.tensor(conf_int[si]).expand(1, n_conf))).sum(0) - 1
     conf = confidence
     qalpha = torch.ones(4, n_conf, n_size, device=predn.device)
@@ -627,8 +627,8 @@ def parse_opt():
     parser.add_argument('--iou-thres', type=float, default=0.6, help='NMS IoU threshold')
     parser.add_argument('--iou-conformal', type=float, default=0.5, help='IoU threshold for conformal prediction')
     parser.add_argument('--split', type=float, default=0.5, help='Split factor of dataset')
-    parser.add_argument('--n-conf', type=int, default=1, help='Number of confidence interval')
-    parser.add_argument('--n-size', type=int, default=1, help='Number of class interval')
+    parser.add_argument('--n-conf', type=int, default=5, help='Number of confidence interval')
+    parser.add_argument('--n-size', type=int, default=5, help='Number of class interval')
     parser.add_argument('--risk', type=float, default=0.97, help='Coverage Rate')
     parser.add_argument('--task', default='val', help='train, val, test, speed or study')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
