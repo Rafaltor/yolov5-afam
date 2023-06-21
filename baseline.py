@@ -230,8 +230,7 @@ def prediction(detections, labels, qalpha, iou_thres, conf_int, size_int, n_conf
     for si in range(n_size):
         confidence[size_temp == si] = (conf[size_temp == si] >= torch.t(torch.tensor(conf_int[si], device=conf.device).expand(1, n_conf))).sum(0) - 1
 
-    if (confidence.sum() != 0):
-        print(confidence)
+ 
     scale = qalpha[:, confidence, size_temp]
     '''n_conf, n_size = 5, 4
 
