@@ -243,7 +243,7 @@ def prediction(detections, labels, qalpha, iou_thres, conf_int, size_int, n_conf
     size = (pred_area > torch.t(size_int.expand(1, n_size)) ** 2).sum(0) - 1'''
 
 
-    coveredM, scale_x, scale_y = coverage(detection_matched, labels_matched, scale)
+    coveredM, cover_1d, scale_x, scale_y = coverage(detection_matched, labels_matched, scale)
 
     size = (pred_area > torch.t(torch.tensor(size_int_l, device=pred_area.device).expand(1, 5))).sum(0) - 1
 
@@ -253,7 +253,7 @@ def prediction(detections, labels, qalpha, iou_thres, conf_int, size_int, n_conf
             torch.tensor(conf_int_l[si], device=conf.device).expand(1, 5))).sum(0) - 1
     conf = confidence
 
-    return coveredM, conf, size, scale_x, scale_y
+    return coveredM, cover_1d, conf, size, scale_x, scale_y
 
 
 def coverage(detections, labels, scale):
@@ -274,9 +274,10 @@ def coverage(detections, labels, scale):
     iou = box_iou(labels, detections)
     if len(labels):
         coveredM = (iog).max(1)[0] == 1
-        return coveredM, scale_x, scale_y
+        cover_1d = bigB[:, 0] < labels[:, 0]
+        return coveredM, cover_1d, scale_x, scale_y
     else:
-        return torch.zeros(len(detections), device=labels.device), torch.zeros(0, device=labels.device), torch.zeros(0, device=labels.device)
+        return torch.zeros(len(detections), device=labels.device), torch.zeros(len(detections), device=labels.device), torch.zeros(0, device=labels.device), torch.zeros(0, device=labels.device)
 
 
 @torch.no_grad()
@@ -520,7 +521,7 @@ def run(
 
         print(1)
     '''
-    stats, proportion = [], []
+    stats, stats_1d, proportion = [], [], []
     tot = 0
     pbar = tqdm(val, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
@@ -566,9 +567,9 @@ def run(
                 labels = torch.cat((labels[:, 0:1], tbox), 1)
             tot += len(labels)
 
-            coveredM, conf, size, scale_x, scale_y = prediction(predn, labels, qalpha, iou_conformal, conf_int, size_int, n_conf, n_size, conf_int_l, size_int_l)
+            coveredM, cover_1d, conf, size, scale_x, scale_y = prediction(predn, labels, qalpha, iou_conformal, conf_int, size_int, n_conf, n_size, conf_int_l, size_int_l)
             stats.append((conf, size, coveredM, scale_x, scale_y))
-
+            stats_1d.append((conf, size, cover_1d, scale_x, scale_y))
             #smallB, bigB = scale_boxes(pred[:, :4], scale[0, :], scale[1, :]), \
             #               scale_boxes(pred[:, :4], scale[2, :], scale[3, :])
 
@@ -589,8 +590,10 @@ def run(
             plt.show()'''
 
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
+    stats_1d = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats_1d)]  # to numpy
 
     coverm, count, Sx, Sy = cover_per_conf(*stats, 5, 5)
+    cover_1d, count, Sx, Sy = cover_per_conf(*stats_1d, 5, 5)
     '''
     matplotlib.use('TkAgg')
     plt.figure()
@@ -613,7 +616,7 @@ def run(
 
 
 
-    return qalpha.transpose(0, 2)[:, :, :], np.transpose(count), np.transpose(coverm), np.transpose(Sx), np.transpose(Sy)
+    return qalpha.transpose(0, 2)[:, :, :], np.transpose(count), np.transpose(coverm), np.transpose(cover_1d), np.transpose(Sx), np.transpose(Sy)
 
 
 def parse_opt():
@@ -626,8 +629,8 @@ def parse_opt():
     parser.add_argument('--iou-thres', type=float, default=0.6, help='NMS IoU threshold')
     parser.add_argument('--iou-conformal', type=float, default=0.5, help='IoU threshold for conformal prediction')
     parser.add_argument('--split', type=float, default=0.5, help='Split factor of dataset')
-    parser.add_argument('--n-conf', type=int, default=5, help='Number of confidence interval')
-    parser.add_argument('--n-size', type=int, default=5, help='Number of class interval')
+    parser.add_argument('--n-conf', type=int, default=1, help='Number of confidence interval')
+    parser.add_argument('--n-size', type=int, default=1, help='Number of class interval')
     parser.add_argument('--risk', type=float, default=0.97, help='Coverage Rate')
     parser.add_argument('--task', default='val', help='train, val, test, speed or study')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
